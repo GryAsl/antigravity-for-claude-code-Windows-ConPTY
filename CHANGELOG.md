@@ -3,6 +3,79 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.22.0
+- **Docs: the number of delegations is the lever — batch them.** Benchmarking this
+  plugin (Opus 5 conductor · Gemini 3.6 Flash High executor · agy 1.1.8 · n=3/arm, cold
+  cache) confirmed the per-delegation economics and located what actually breaks them.
+  Offloading a large corpus worked as designed — the conductor's `cache_read` fell **61%**,
+  it never opened the corpus itself, each digest came back at ~4k tokens — but **each
+  `agy-delegate` call is an independent session sharing no cache with the last**, so a
+  conductor that delegated 7.3× against the same corpus paid to ingest it 7.3×.
+  **Two-thirds of the executor's cost was re-reading material it had already read**;
+  break-even was ~5.7 delegations.
+  **Correction to shipped guidance:** rule 6 told you to keep an agy session alive with
+  `--continue` so the working context "lives on the cheap side". Measured, that is
+  backwards — resuming carries the whole prior conversation forward *and* agy re-reads the
+  material anyway, so the continued call cost **+82% / +277%** vs a fresh one (n=2), with
+  `cache_read` 3–14× higher. `--continue` is for resuming after a quota/timeout failure,
+  not a cost lever. The only lever that actually removes a re-ingestion is folding related
+  units into one fully-specified delegation (rule 4). Also recorded: delegation **moves** work
+  rather than removing it (~2.8× the normalized token volume for the same result), and
+  agy's own prompt cache covers only ~2/3 of its context re-reads — both push toward
+  fewer, larger delegations. Stated as direction from one configuration, not as constants.
+- **`AGY_USAGE_LOG` — a side channel the conductor's own habits can't truncate.**
+  `AGY_USAGE`/`AGY_SIGNAL` go to stderr, but this skill tells the conductor to keep its
+  context lean, so it writes `agy-delegate ... 2>&1 | tail -N`; stdout (the digest) is
+  emitted *after* the usage line, so `tail` keeps the digest and drops the usage. Measured
+  in the wild: a benchmark harness lost most of its Gemini-side cost data this way, making
+  the hybrid look cheaper than it was. Set `AGY_USAGE_LOG=/path` (or the `usage_log`
+  option) and both line types are appended to that file as well. Appends (never
+  truncates), off by default, and an unwritable path is non-fatal — measurement must not
+  break the work.
+- **`agy-trace` now covers plain delegations, not just internal-fan-out subagents.**
+  Every agy run leaves a readable `transcript.jsonl`, and `agy-delegate` prints the
+  `conversationId` in `AGY_USAGE`, so cost and trajectory join 1:1 (verified 10/10 in the
+  benchmark). New **`--audit`** (step-type counts + every non-zero exit) and **`--last`**.
+  This makes the skill's non-negotiable "never trust agy's self-reported GREEN" rule
+  actually checkable: measured, a delegation reported SUCCESS while **6 commands inside it
+  failed**. Documented limit: the command **strings** are recorded nowhere (not in
+  `transcript.jsonl`, `transcript_full.jsonl`, or `cli-*.log`) — you get that a command
+  ran, its exit code and its output; to attribute a filesystem change, diff the tree.
+- **Fix: structured-error classification broke on any error containing quotes.** agy
+  quotes the offending value in its message (`invalid model selection (--model \"X\" ...):
+  model X is not recognized as a known model`), and the wrapper pulled the `error` field out
+  with `sed 's/.*"error": *"\([^"]*\)".*/\1/'` — which stops at that first escaped quote,
+  discarding the diagnostic phrase that follows it. The classifier therefore never saw it:
+  a bad `--model` or `tier_*` remap reported a generic **"agy failed" (exit 2)** instead of
+  **MODEL_UNAVAILABLE (exit 14)** with the "run `agy models`" hint. Present since 0.21.0,
+  i.e. the structured-output release existed to stop exactly this kind of misclassification.
+  python now writes the raw error to its own file instead of it being re-parsed with sed.
+  The old stub's error string had **no embedded quotes**, which is why the suite stayed
+  green while this shipped — the new stub uses agy's real wording.
+- **`prices.json`: recorded Gemini 3.6 Flash's rates without repricing the shipped
+  default.** The VM confirmed 3.6 Flash output at **7.50/M** (vs 3.5's 9.00; in and
+  cached-in unchanged) — but `agy-cost-compare.sh` picks the `gemini_flash` key by **tier
+  name**, and `model_for_tier()`'s `flash` tier still resolves to **Gemini 3.5 Flash
+  (High)**. So `gemini_flash` stays at 9.00, which is correct for what ships, and 3.6's
+  rates live in a new `gemini_flash_36` for anyone who remaps `tier_flash`.
+  *(An earlier commit in this branch changed `gemini_flash.out` to 7.50 and asserted 3.6
+  was the default — contradicting this same PR's SKILL.md text, and understating Gemini
+  output by 17% out of the box. Caught in review.)*
+  Also added `cached_in` (Gemini prices cached input at a flat rate — *not*
+  `cache_read_mult × in`, which is Claude-deck only) and a note that Gemini's
+  context-cache **storage** is time-billed and unreported by agy, so figures computed
+  here are a **lower bound**. `cached_in` has no consumer yet: `measure-session.py`
+  prices the orchestrator deck only.
+  Two tests now hold this together: every hardcoded fallback in `agy-cost-compare.sh`
+  must match `prices.json`, and `gemini_flash` must match whatever the `flash` tier
+  actually resolves to.
+- **Docs: Gemini 3.6 Flash High measured against 3.5.** −23% input tokens for the same
+  task (n=2, order-reversed) and output at $7.50/M vs $9.00/M — but it does **not** reduce
+  `cache_read` (+6%) and is ~29% slower. `flash-medium` is −31% input / −21% wall but
+  **`cache_read` +43%** (n=3, reproduced), so it loses on cache_read-dominated agentic
+  work. The `flash` default stays on 3.5 for plan availability; remap `tier_flash` to
+  `gemini-3.6-flash-high` when your plan serves it.
+
 ## 0.21.1
 - **Fix: the JSON-mode capability probe could silently disable structured output
   (SIGPIPE race).** `agy-delegate.sh` probed support with

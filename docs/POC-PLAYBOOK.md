@@ -123,11 +123,14 @@ come from delegation. In enforcement-strength order:
 
 > On {task types}, the hybrid cut Claude-side cost **−X%** (COST-WEIGHTED, est. $Y)
 > at an **equal quality gate** ({gate}, n={runs}/arm). Break-even: tasks under
-> {size} are cheaper solo. Gemini-side cost accounted separately at ${Z}.
-> Rates verified against Vertex pricing on {date}.
+> {size} are cheaper solo. Gemini-side cost accounted separately at ${Z}
+> Conductor {model}, executor {model}, agy {version}, measured {date};
+> rates verified against Vertex pricing on {date}.
 
-Always include: the break-even statement, what is *not* counted, and the rate-verification
-date. The honest caveats are what make the headline number survive scrutiny.
+Always include: the break-even statement, what is *not* counted, the model/version
+triple, and the rate-verification date. The honest caveats are what make the
+headline number survive scrutiny — and the version triple is what stops the number being
+quoted, a year later, as if it were a property of the plugin.
 
 ---
 
