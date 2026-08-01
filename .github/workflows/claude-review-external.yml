@@ -13,10 +13,17 @@ name: Claude review (external, gated)
 #   * tools are restricted to reading + posting comments (no Write/Edit, no
 #     arbitrary Bash, no build/test execution of the contributor's code).
 #
-# Adding the label is the human approval step. Remove and re-add it to re-run.
+# Adding the label is the human approval step — but the label ALONE is not
+# authorisation, and it is not durable:
+#
+#   * Labelling is available to triage collaborators, so `authorise` below re-checks
+#     that whoever applied it actually has write access.
+#   * `synchronize` is included so a push to an already-labelled branch is re-reviewed.
+#     Without it a contributor gets one clean review and can then push anything: the
+#     review stays on the PR looking current while describing an older head.
 on:
   pull_request_target:
-    types: [labeled]
+    types: [labeled, synchronize]
 
 permissions:
   contents: read
@@ -28,8 +35,75 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Cheap gate, separate job: nothing with secrets runs until this passes.
+  authorise:
+    # Run when the label is applied, or on any push to a PR that already carries it.
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'claude-review') &&
+      (github.event.action == 'synchronize' || github.event.label.name == 'claude-review')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read          # narrower than the workflow default; this job needs nothing else
+      issues: read             # the timeline below lives under the issues API
+    steps:
+      - name: Require write access from whoever applied the label
+        # ONE path, deliberately. An earlier version checked
+        # `github.event.sender` only on `labeled` and skipped the step on
+        # `synchronize` — which meant a triage collaborator's rejected label
+        # STAYED on the pull request, and every subsequent push then found the
+        # label present, skipped the check, and ran the secrets-bearing job.
+        # One mislabel primed the PR permanently. Branching on event shape is
+        # what did it, so this asks the same question every time: who put this
+        # label here, and do they have write access?
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+          NUM: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          # Most recent `labeled` event for THIS label — a label can be removed
+          # and re-added by a different person, and the last one is the one that
+          # matters.
+          #
+          # NOT `--paginate --jq`: that applies the filter to each page
+          # SEPARATELY, so `| last` yields a last-per-page and the result is
+          # multi-valued. Measured on a real pull request with per_page=3, the
+          # --jq form returns "\n\nyuting0624" — two empty pages then the actor —
+          # so every comparison below fails and the gate locks out exactly the
+          # long, multi-round pull requests `synchronize` exists to keep
+          # reviewing. `--slurp` cannot rescue it: gh refuses it together with
+          # `--jq`. So: no `--jq`, and `jq -s` joins the pages instead.
+          actor="$(gh api "repos/$REPO/issues/$NUM/timeline?per_page=100" --paginate 2>/dev/null \
+            | jq -r -s 'add
+                        | map(select(.event == "labeled" and .label.name == "claude-review"))
+                        | last | .actor.login // empty' 2>/dev/null || true)"
+          if [ -z "$actor" ] || [ "$actor" = "null" ]; then
+            echo "::error::could not determine who applied the 'claude-review' label. Refusing rather than assuming."
+            exit 1
+          fi
+          echo "'claude-review' was applied by: $actor"
+
+          # The owner path needs no further API call. That matters: the
+          # collaborators permission endpoint is documented as needing push
+          # access itself, and GITHUB_TOKEN here is deliberately narrow — so a
+          # probe could fail for reasons that have nothing to do with $actor.
+          if [ "$actor" = "$OWNER" ]; then
+            echo "$actor is the repository owner — authorised."; exit 0
+          fi
+          if ! resp="$(gh api "repos/$REPO/collaborators/$actor/permission" 2>&1)"; then
+            echo "::error::could not verify '$actor' (the token may lack the scope for this endpoint). Refusing rather than assuming. Response: ${resp}"
+            exit 1
+          fi
+          perm="$(printf '%s' "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("permission","none"))' 2>/dev/null || echo none)"
+          echo "$actor has '$perm' on $REPO"
+          case "$perm" in
+            admin|write|maintain) echo "authorised." ;;
+            *) echo "::error::'$actor' lacks write access — labelling is available to triage collaborators, so the label alone is not authorisation. Remove the label; leaving it on would re-arm this gate on the next push."; exit 1 ;;
+          esac
+
   review:
-    if: github.event.label.name == 'claude-review'
+    needs: authorise
     runs-on: ubuntu-latest
     steps:
       # Trusted: the base repo, at the workspace root (the action expects a git repo here).
