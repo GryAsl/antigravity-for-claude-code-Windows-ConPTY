@@ -92,6 +92,23 @@ sys.exit(0 if n else 1)
 ' "${files[@]}" 2>/dev/null
 }
 
+# True when version $1 is strictly older than $2. Pure shell on purpose: `sort -V` is
+# not universal, and when it is missing the command substitution comes back EMPTY, the
+# comparison quietly fails, and the check it guards never fires — a version gate that
+# silently does nothing is worse than none, because it reads as a clean bill of health.
+# (macOS's own sort does support -V; BusyBox and minimal images are the risk.)
+ver_lt() {
+  local a="$1" b="$2" i x y
+  for i in 1 2 3; do
+    x="$(printf '%s' "$a" | cut -d. -f"$i")"; y="$(printf '%s' "$b" | cut -d. -f"$i")"
+    case "$x" in ''|*[!0-9]*) x=0 ;; esac
+    case "$y" in ''|*[!0-9]*) y=0 ;; esac
+    [ "$x" -lt "$y" ] && return 0
+    [ "$x" -gt "$y" ] && return 1
+  done
+  return 1                            # equal is not older
+}
+
 # True on native Windows (Git Bash/MSYS/Cygwin), NOT WSL — where headless agy hangs.
 on_windows_native() {
   case "${OSTYPE:-}" in msys*|cygwin*|win32) return 0 ;; esac
@@ -105,7 +122,25 @@ echo "Antigravity for Claude Code — doctor"
 if command -v agy >/dev/null 2>&1; then
   # version probe is guarded too: `command -v` already proved agy exists, and on a
   # headless hang even `agy --version` shouldn't be able to freeze doctor (issue #6).
-  ok "agy found: $(command -v agy)  ($(agy_guard 10 --version 2>/dev/null | head -1))"
+  AGY_VER="$(agy_guard 10 --version 2>/dev/null | head -1 | tr -d '[:space:]')"
+  ok "agy found: $(command -v agy)  (${AGY_VER:-version unknown})"
+
+  # `--tier` resolves to `--model`, and agy IGNORED --model/--effort in headless `-p`
+  # until 1.1.10 — the flag was applied after model configuration had initialised, so
+  # the run silently fell back to the persisted default. Nothing surfaces that: the
+  # call succeeds, returns sensible text, and reports usage. So on an older agy the
+  # plugin's whole routing story is inert and looks like it is working, which is worth
+  # a warning rather than a footnote.
+  case "$AGY_VER" in
+    ''|*[!0-9.]*) : ;;               # unparseable (dev build, wrapper, hang) — say nothing
+    *)
+      if ver_lt "$AGY_VER" 1.1.10; then
+        warn "agy $AGY_VER ignores --model/--effort in headless \`-p\` (fixed in 1.1.10)"
+        info "so --tier / tier_* remaps do NOT take effect — every delegation silently runs"
+        info "your persisted default model instead, and nothing in the output says so."
+        info "fix: \`agy update\` to 1.1.10 or newer."
+      fi ;;
+  esac
 else
   bad "agy NOT on PATH"
   info "fix: install the Antigravity CLI, then ensure its bin dir is on PATH"

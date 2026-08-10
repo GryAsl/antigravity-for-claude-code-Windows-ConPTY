@@ -680,6 +680,61 @@ if printf '%s' "$out" | grep -q "tier model present: Gemini 3.5 Flash (High)"; t
   echo "ok: doctor matches default flash tier in slug format"; PASS=$((PASS+1));
 else echo "FAIL: doctor did not confirm the default flash tier present"; FAIL=$((FAIL+1)); fi
 
+echo "== doctor.sh agy-version gate (--tier is inert below 1.1.10) =="
+# agy ignored --model/--effort in headless `-p` until 1.1.10: the flag was applied after
+# model configuration had initialised, so the run silently fell back to the persisted
+# default. The wrapper resolves every --tier to --model and always runs -p, so on an
+# older agy the routing is inert AND looks like it works — the call succeeds, returns
+# sensible text, reports usage. Nothing but a version check can surface that.
+ver_doctor() { # $1 = version the stub reports; echoes doctor's output
+  local d; d="$TMP/agyver"; mkdir -p "$d"
+  { echo '#!/usr/bin/env bash'
+    echo "[ \"\$1\" = --version ] && { echo '$1'; exit 0; }"
+    echo '[ "$1" = models ] && { printf "%s\n" "Gemini 3.5 Flash (High)" "Gemini 3.5 Flash (Low)" "Gemini 3.1 Pro (High)"; exit 0; }'
+    echo 'exit 0'; } > "$d/agy"
+  chmod +x "$d/agy"
+  PATH="$d:$PATH" bash "$ROOT/scripts/doctor.sh" 2>&1
+}
+if printf '%s' "$(ver_doctor 1.1.9)" | grep -q 'ignores --model'; then
+  echo "ok: doctor warns that --tier is inert on agy 1.1.9"; PASS=$((PASS+1));
+else echo "FAIL: no warning on agy 1.1.9 — tier selection is silently doing nothing"; FAIL=$((FAIL+1)); fi
+# 1.1.10 is the fix, and a naive string compare puts it BELOW 1.1.9 — the boundary is
+# the whole point of the check.
+if printf '%s' "$(ver_doctor 1.1.10)" | grep -q 'ignores --model'; then
+  echo "FAIL: doctor warns on 1.1.10, which is the version that fixed it"; FAIL=$((FAIL+1));
+else echo "ok: no warning on agy 1.1.10 (string compare would have got this wrong)"; PASS=$((PASS+1)); fi
+if printf '%s' "$(ver_doctor 1.2.0)" | grep -q 'ignores --model'; then
+  echo "FAIL: doctor warns on 1.2.0"; FAIL=$((FAIL+1));
+else echo "ok: no warning on a later minor (1.2.0)"; PASS=$((PASS+1)); fi
+# An unparseable version must not produce a scary warning on a build we cannot judge.
+if printf '%s' "$(ver_doctor dev-local)" | grep -q 'ignores --model'; then
+  echo "FAIL: doctor warns on an unparseable version"; FAIL=$((FAIL+1));
+else echo "ok: unparseable version is left alone"; PASS=$((PASS+1)); fi
+# The gate must not depend on `sort -V`. Where that is missing the command substitution
+# comes back empty, the comparison quietly fails, and the warning never fires — a version
+# gate that silently does nothing reads as a clean bill of health. Both reviewers on #54
+# flagged the dependency; this pins the property rather than the implementation.
+# Strip comments first: the replacement explains WHY it avoids `sort -V`, and an
+# unstripped grep matches that sentence and reports the dependency it removed.
+if sed 's/#.*//' "$ROOT/scripts/doctor.sh" | grep -q 'sort -V'; then
+  echo "FAIL: doctor's version gate depends on sort -V (absent on some shells)"; FAIL=$((FAIL+1));
+else echo "ok: version gate does not depend on sort -V"; PASS=$((PASS+1)); fi
+brk="$TMP/nosort"; mkdir -p "$brk"; printf '#!/bin/sh\nexit 127\n' > "$brk/sort"; chmod +x "$brk/sort"
+d="$TMP/agyver"; mkdir -p "$d"
+{ echo '#!/usr/bin/env bash'
+  echo '[ "$1" = --version ] && { echo 1.1.9; exit 0; }'
+  echo '[ "$1" = models ] && { printf "%s\n" "Gemini 3.5 Flash (High)" "Gemini 3.5 Flash (Low)" "Gemini 3.1 Pro (High)"; exit 0; }'
+  echo 'exit 0'; } > "$d/agy"
+chmod +x "$d/agy"
+# Capture, THEN grep. `cmd | grep -q` exits at the first match and closes the pipe, the
+# upstream dies of SIGPIPE (141), and `set -o pipefail` (line 8) marks the whole pipeline
+# failed — so the assertion reads as "no warning" while the warning is right there. This
+# is the 0.21.1 bug, in the file whose tests guard against it.
+nosort_out="$(PATH="$brk:$d:$PATH" bash "$ROOT/scripts/doctor.sh" 2>&1)"
+if printf '%s' "$nosort_out" | grep -q 'ignores --model'; then
+  echo "ok: the warning still fires with sort unusable"; PASS=$((PASS+1));
+else echo "FAIL: a broken sort silences the version gate"; FAIL=$((FAIL+1)); fi
+
 echo "== doctor.sh stdio-MCP detection (issue #37 diagnostic) =="
 # The hint is diagnostic-only, so getting it wrong fails SILENTLY — it just never
 # helps the person it exists for. Pin the two things measured against agy 1.1.9:
