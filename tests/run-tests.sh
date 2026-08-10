@@ -905,6 +905,40 @@ else echo "FAIL: job did not render 'rc=10: QUOTA' label (got: $out)"; FAIL=$((F
 if printf '%s' "$out" | grep -q "QUOTA_EXHAUSTED"; then echo "ok: job shows AGY_SIGNAL"; PASS=$((PASS+1));
 else echo "FAIL: job did not surface AGY_SIGNAL"; FAIL=$((FAIL+1)); fi
 
+echo "== CI workflow invariants =="
+# These cannot be executed here — they need a GitHub runner — so assert the SHAPE of the
+# two expressions that have each been wrong once, in a way that a well-meaning
+# simplification would break.
+#
+# `cancel-in-progress` is evaluated BEFORE any job condition, so a run that will be
+# skipped still cancels whatever is running. Naive `true` made the review cancel itself
+# when it posted its summary (#42); `comment.user.type != 'Bot'` fixed that but still let
+# ANY human comment kill an in-flight review (#52). It needs both guards.
+QW="$ROOT/.github/workflows/quorum-review.yml"
+CONC="$(sed -n '/^concurrency:/,/^permissions:/p' "$QW")"
+if printf '%s' "$CONC" | grep -q "cancel-in-progress: *true"; then
+  echo "FAIL: quorum cancel-in-progress is bare true — the review will cancel itself"; FAIL=$((FAIL+1));
+else echo "ok: quorum cancel-in-progress is an expression"; PASS=$((PASS+1)); fi
+# Cancel ONLY on a push. `cancel-in-progress: false` queues the new run rather than
+# discarding it, so nothing else ever needs to cancel — a comment or a dispatch waits its
+# turn. This is what makes the expression safe without replicating the job's `if:`.
+if printf '%s' "$CONC" | grep -q "github.event_name == 'pull_request'"; then
+  echo "ok: cancel-in-progress cancels only on a push"; PASS=$((PASS+1));
+else echo "FAIL: cancel-in-progress no longer keys on pull_request alone"; FAIL=$((FAIL+1)); fi
+# The design decision, asserted directly: the moment this expression starts reasoning
+# about WHO commented or WHAT they said, it is predicting whether the job will run — and
+# it was broader than the job's `if:` on both previous attempts (#42, #53), which is how
+# a run that gets skipped ends up cancelling a live review.
+if printf '%s' "$CONC" | grep -qE 'comment\.(body|user|author_association)'; then
+  echo "FAIL: concurrency inspects the comment again — it must not predict the job condition"; FAIL=$((FAIL+1));
+else echo "ok: concurrency does not try to predict whether the job will run"; PASS=$((PASS+1)); fi
+
+# The fork guard runs before anything is cloned or any credential is minted.
+if [ "$(grep -n 'Refuse a fork' "$QW" | cut -d: -f1)" \
+     -lt "$(grep -n 'actions/checkout@' "$QW" | head -1 | cut -d: -f1)" ]; then
+  echo "ok: the fork check precedes the checkout"; PASS=$((PASS+1));
+else echo "FAIL: a fork could be cloned before it is refused"; FAIL=$((FAIL+1)); fi
+
 echo "== plugin contract =="
 python3 - "$ROOT" <<'PY'
 import json, os, re, sys, glob

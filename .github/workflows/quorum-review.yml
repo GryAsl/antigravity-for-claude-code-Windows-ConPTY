@@ -42,25 +42,34 @@ on:
         description: Pull request number to review
         required: true
 
-# One review at a time per pull request — two runs racing to edit the same
-# summary comment can lose the ledger the other just wrote.
+# One review at a time per pull request — two runs racing to edit the same summary
+# comment can lose the ledger the other just wrote.
 #
-# `cancel-in-progress` has to be an EXPRESSION, not `true`. Concurrency is
-# evaluated before any job condition, so a run that will be skipped still enters
-# the group and still cancels whatever is running — and posting the summary
-# comment fires `issue_comment`, so the review cancelled itself seconds after
-# finishing. The Bot check in `if:` stops the loop; it cannot stop the
-# cancellation.
+# `cancel-in-progress` is evaluated BEFORE any job condition, so a run that will be
+# skipped still enters the group. Bare `true` therefore made the review cancel ITSELF
+# when it posted its summary (#42), and every ordinary human comment cancel the review
+# of the push it was replying to (#53).
 #
-# This is upstream's shape, adopted in place of the `-bot` group suffix we had.
-# Theirs is better: the bot run stays in the same group, so a real run can still
-# cancel it — a separate group meant a stale bot run just sat there instead.
+# Two attempts at fixing that tried to predict, in this expression, whether the job
+# would actually run — first excluding bots, then excluding comments without a command.
+# Both stayed BROADER than the job's `if:` (no author_association, no issue-vs-PR check,
+# `@quorum` and `/review` matched separately rather than adjacent), so a run that gets
+# skipped could still kill a live one. Chasing that means duplicating the job condition
+# here and keeping two copies in sync.
+#
+# It does not need predicting. `cancel-in-progress: false` does not DISCARD the new run,
+# it queues it as pending and starts it when the current one finishes. So the only case
+# where cancelling is right is the one where the running review is genuinely obsolete:
+# a new push. Everything else — comments, manual dispatch — can simply wait its turn,
+# and a run that turns out to be skippable costs a few seconds of a queue slot.
+#
+# One rule, nothing to keep in sync, and it subsumes both #42 and #53.
 concurrency:
   group: >-
     quorum-review-${{ github.event.pull_request.number
       || github.event.issue.number
       || github.event.inputs.pr }}
-  cancel-in-progress: ${{ github.event.comment.user.type != 'Bot' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
