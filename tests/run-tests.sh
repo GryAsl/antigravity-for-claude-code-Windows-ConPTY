@@ -14,6 +14,41 @@ MEASURE="$ROOT/scripts/measure-session.py"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 PASS=0; FAIL=0
 
+# bash does not hoist: a function called above its definition is `command not found`,
+# exit 127, and every `if` around it silently takes the else branch. That is how two
+# assertions here went dead while the suite still reported all green — the has() below
+# was first added beside the doctor tests, above which two call sites already sat, and
+# both reviewers caught it.
+#
+# bash 4's `command_not_found_handle` would turn that into a visible failure. It was
+# tried and removed: macOS ships bash 3.2, where DEFINING it is a silent no-op — a guard
+# that reads as protection and provides none, which is the exact class of defect this
+# release is about. So the check is static, runs first, and works on any shell.
+if ! python3 "$HERE/check-helper-order.py" "$0"; then
+  echo "FAIL: a helper is used above its definition (bash does not hoist)"; FAIL=$((FAIL+1));
+else echo "ok: every helper is defined before its first use"; PASS=$((PASS+1)); fi
+
+# The checker is itself a guard, so a shape it misses is a silent false negative — the
+# defect it exists to prevent. Review found three the first regex walked past. Pin them.
+order_case() { # $1 = label, $2 = expected rc, $3 = script body ('\n' for newlines)
+  # printf '%b' so the fixture stays on ONE line here. Written across real lines, the
+  # `has() { :; }` inside it is indistinguishable from a definition to a checker that
+  # reads the file as shell — and it was: the checker flagged its own test data.
+  local f="$TMP/order-$1.sh"; printf '%b\n' "$3" > "$f"
+  python3 "$HERE/check-helper-order.py" "$f" >/dev/null 2>&1; local rc=$?
+  if [ "$rc" -eq "$2" ]; then echo "ok: helper-order checker — $1"; PASS=$((PASS+1));
+  else echo "FAIL: helper-order checker — $1 (rc=$rc, want $2)"; FAIL=$((FAIL+1)); fi
+}
+order_case elif           1 'if x; then :; elif hlp a b; then :; fi\nhlp() { :; }'
+order_case case-branch    1 'case $x in\n  foo) hlp a b ;;\nesac\nhlp() { :; }'
+order_case brace-group    1 '{ hlp a b; }\nhlp() { :; }'
+order_case defined-first  0 'hlp() { :; }\nif hlp a b; then :; fi'
+# A false positive is not harmless either: it fails a suite over a mention in a string.
+order_case quoted-mention 0 'echo "hlp to be defined"\nhlp() { :; }'
+
+has() { case "$2" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
+
+
 # --- stub `agy` on PATH; behavior controlled by $STUB_MODE -------------------
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/agy" <<'STUB'
@@ -88,7 +123,7 @@ done
 check() { # desc  expected_rc  actual_rc  [substr]  [actual_out]
   local desc="$1" erc="$2" arc="$3" sub="${4:-}" out="${5:-}"
   if [ "$arc" != "$erc" ]; then echo "FAIL: $desc (rc want $erc got $arc)"; FAIL=$((FAIL+1)); return; fi
-  if [ -n "$sub" ] && ! printf '%s' "$out" | grep -qF -- "$sub"; then
+  if [ -n "$sub" ] && ! grep -qF -- "$sub" <<<"$out"; then
     echo "FAIL: $desc (missing '$sub' in output)"; FAIL=$((FAIL+1)); return; fi
   echo "ok: $desc"; PASS=$((PASS+1))
 }
@@ -142,7 +177,7 @@ check "json mode: stdout carries the response text (not the envelope)" 0 "$rc" "
 # the first match, `agy --help` can die of SIGPIPE, and under `set -o pipefail` the probe
 # silently reads as "unsupported" -> JSON mode off with no AGY_USAGE, indistinguishable
 # from "no delegation happened". Observed at ~75% failure on a loaded container.
-if sed 's/#.*//' "$DELEGATE" | grep -qE 'agy --help[^|]*\| *grep'; then
+if grep -qE 'agy --help[^|]*\| *grep' <(sed 's/#.*//' "$DELEGATE"); then
   echo "FAIL: capability probe pipes agy --help into grep (SIGPIPE race under pipefail)"; FAIL=$((FAIL+1));
 else echo "ok: capability probe avoids the grep pipe (no SIGPIPE race)"; PASS=$((PASS+1)); fi
 # Under load the probe must still be deterministic: run the real gate shape 20x.
@@ -161,7 +196,7 @@ else echo "FAIL: capability probe flaked $probe_off/20 times"; FAIL=$((FAIL+1));
 # unguarded `agy` invocation left: the timeout resolver used to be initialised
 # after it. A hang here is not hypothetical — doctor's own MCP hint documents a
 # blocking mode that survives the issue-37 fix.
-if sed 's/#.*//' "$DELEGATE" | grep -qE '"\$TO_CMD"[^|]*agy --help'; then
+if grep -qE '"\$TO_CMD"[^|]*agy --help' <(sed 's/#.*//' "$DELEGATE"); then
   echo "ok: the --help capability probe is wall-clock bounded"; PASS=$((PASS+1));
 else echo "FAIL: --help probe runs unguarded (no timeout)"; FAIL=$((FAIL+1)); fi
 if [ "$(sed 's/#.*//' "$DELEGATE" | grep -n 'TO_CMD="\$(timeout_cmd' | cut -d: -f1)" \
@@ -176,10 +211,10 @@ else echo "FAIL: TO_CMD resolved after the --help probe — the guard is a no-op
 # only fix is to not use a pipe, so guard the shape rather than the symptom —
 # a hang cannot be asserted on cheaply, and the next refactor is where it comes
 # back. Both the main call and the --help probe were affected.
-if sed 's/#.*//' "$DELEGATE" | grep -qE '=[[:space:]]*"?\$\((\$?[A-Za-z_"]*TO_CMD"?[^)]*)?[[:space:]]*agy[[:space:]]'; then
+if grep -qE '=[[:space:]]*"?\$\((\$?[A-Za-z_"]*TO_CMD"?[^)]*)?[[:space:]]*agy[[:space:]]' <(sed 's/#.*//' "$DELEGATE"); then
   echo "FAIL: agy captured through a command substitution (issue #37 pipe hang)"; FAIL=$((FAIL+1));
 else echo "ok: agy output is never captured through a pipe (issue #37)"; PASS=$((PASS+1)); fi
-if sed 's/#.*//' "$ROOT/scripts/doctor.sh" | grep -qE '^[[:space:]]*(agy|"\$TO_CMD")[^>|]*$' \
+if grep -qE '^[[:space:]]*(agy|"\$TO_CMD")[^>|]*$' <(sed 's/#.*//' "$ROOT/scripts/doctor.sh") \
    && ! grep -q 'cat "\$f"' "$ROOT/scripts/doctor.sh"; then
   echo "FAIL: doctor's agy_guard writes to the caller's pipe (issue #37)"; FAIL=$((FAIL+1));
 else echo "ok: doctor's agy_guard redirects to a file, cat is the only pipe writer"; PASS=$((PASS+1)); fi
@@ -208,7 +243,7 @@ check "the file form returns against the same stub" 0 "$?" "PONG" "$mcp_out"
 if [ -z "$out" ]; then
   echo "FAIL: \$out is empty at the envelope check — the assertion below proves nothing"; FAIL=$((FAIL+1));
 else echo "ok: \$out still holds the json_ok reply at the envelope check"; PASS=$((PASS+1)); fi
-if printf '%s' "$out" | grep -q 'conversation_id'; then
+if has 'conversation_id' "$out"; then
   echo "FAIL: json envelope leaked to stdout"; FAIL=$((FAIL+1));
 else echo "ok: json envelope does not leak to stdout"; PASS=$((PASS+1)); fi
 err=$(STUB_JSON_CAPABLE=1 STUB_MODE=json_ok "$DELEGATE" "hi" 2>&1 >/dev/null); rc=$?
@@ -229,10 +264,10 @@ out=$(STUB_JSON_CAPABLE=1 STUB_MODE=json_quota "$DELEGATE" "hi" 2>&1); rc=$?
 check "json mode: structured quota error -> exit 10" 10 "$rc" "QUOTA_EXHAUSTED" "$out"
 # opt-out and capability fallback both take the plain-text path (no AGY_USAGE)
 err=$(STUB_JSON_CAPABLE=1 STUB_MODE=text CLAUDE_PLUGIN_OPTION_STRUCTURED_OUTPUT=off "$DELEGATE" "hi" 2>&1 >/dev/null)
-if printf '%s' "$err" | grep -q "AGY_USAGE"; then echo "FAIL: structured_output=off still used json"; FAIL=$((FAIL+1));
+if grep -q "AGY_USAGE" <<<"$err"; then echo "FAIL: structured_output=off still used json"; FAIL=$((FAIL+1));
 else echo "ok: structured_output=off falls back to plain text"; PASS=$((PASS+1)); fi
 err=$(STUB_JSON_CAPABLE=0 STUB_MODE=text "$DELEGATE" "hi" 2>&1 >/dev/null)
-if printf '%s' "$err" | grep -q "AGY_USAGE"; then echo "FAIL: used json against an agy that lacks the flag"; FAIL=$((FAIL+1));
+if grep -q "AGY_USAGE" <<<"$err"; then echo "FAIL: used json against an agy that lacks the flag"; FAIL=$((FAIL+1));
 else echo "ok: falls back when agy has no --output-format (pre-1.1.8)"; PASS=$((PASS+1)); fi
 
 # --- AGY_USAGE_LOG side channel ---------------------------------------------
@@ -271,7 +306,7 @@ check "unwritable AGY_USAGE_LOG is non-fatal" 0 "$rc" "" "$out"
 # and leaks a bash redirection error on every call. Asserting only on the exit code
 # misses that entirely — check stderr itself.
 err=$(STUB_JSON_CAPABLE=1 STUB_MODE=json_ok AGY_USAGE_LOG=/nonexistent-dir/x.log "$DELEGATE" "hi" 2>&1 >/dev/null)
-if printf '%s' "$err" | grep -qiE 'No such file or directory|Permission denied'; then
+if grep -qiE 'No such file or directory|Permission denied' <<<"$err"; then
   echo "FAIL: unwritable AGY_USAGE_LOG leaks a redirection error to stderr"; FAIL=$((FAIL+1));
 else echo "ok: unwritable AGY_USAGE_LOG is silent, not just non-fatal"; PASS=$((PASS+1)); fi
 # Off by default: no file is created when the option is unset.
@@ -352,25 +387,33 @@ WARN='write grant'
 out=$(STUB_MODE=args "$DELEGATE" "implement the parser module" 2>&1); rc=$?
 check "write prompt w/o --yolo -> warns" 0 "$rc" "$WARN" "$out"
 out=$(STUB_MODE=args "$DELEGATE" --yolo "implement the parser module" 2>&1); rc=$?
-if printf '%s' "$out" | grep -qF "$WARN"; then echo "FAIL: warned even with --yolo"; FAIL=$((FAIL+1));
+if grep -qF "$WARN" <<<"$out"; then echo "FAIL: warned even with --yolo"; FAIL=$((FAIL+1));
 else echo "ok: no write-warning when --yolo is set"; PASS=$((PASS+1)); fi
 out=$(STUB_MODE=args "$DELEGATE" --mode accept-edits "implement the parser module" 2>&1); rc=$?
-if printf '%s' "$out" | grep -qF "$WARN"; then echo "ok: --mode accept-edits still warns (soft-denied on 1.1.3)"; PASS=$((PASS+1));
+if grep -qF "$WARN" <<<"$out"; then echo "ok: --mode accept-edits still warns (soft-denied on 1.1.3)"; PASS=$((PASS+1));
 else echo "FAIL: no warning with --mode accept-edits (should warn since 1.1.3)"; FAIL=$((FAIL+1)); fi
 out=$(STUB_MODE=args "$DELEGATE" "summarize the changelog in 3 bullets" 2>&1); rc=$?
-if printf '%s' "$out" | grep -qF "$WARN"; then echo "FAIL: warned for a non-write prompt"; FAIL=$((FAIL+1));
+if grep -qF "$WARN" <<<"$out"; then echo "FAIL: warned for a non-write prompt"; FAIL=$((FAIL+1));
 else echo "ok: no write-warning for a read/summary prompt"; PASS=$((PASS+1)); fi
 # The warning must NOT claim --yolo is the only way in. Confirmed on agy 1.1.9 by a
 # controlled A/B (#37): a permissions.allow write_file(<dir>) rule grants headless writes
 # with no flag, and this warning fired immediately before one that succeeded.
 out=$(STUB_MODE=args "$DELEGATE" "implement the parser module" 2>&1)
 check "write warning names the permissions.allow route" 0 0 "permissions.allow" "$out"
-if printf '%s' "$out" | grep -q 'NOT write to your workspace without it'; then
+if has 'NOT write to your workspace without it' "$out"; then
   echo "FAIL: warning still asserts --yolo is required for a write"; FAIL=$((FAIL+1));
 else echo "ok: warning no longer claims --yolo is the only write grant"; PASS=$((PASS+1)); fi
 # Same correction on the exit-15 path — where someone lands after being denied.
 out=$(STUB_MODE=softdeny "$DELEGATE" "implement it" 2>&1); rc=$?
 check "exit-15 message offers the narrower grant first" 15 "$rc" "permissions.allow" "$out"
+# The message must not hand the pre-1.1.11 match-everything history to the placeholder it
+# names two sentences earlier. That history belongs to a command(...) rule naming no
+# command; a mistyped write_file() never had it, which is the distinction bad_allow_rules
+# classifies and every document now states. This file was swept for it and missed — it is
+# a .sh, and the sweep looked at documents.
+if has 'grants nothing (and before agy 1.1.11 granted everything)' "$out"; then
+  echo "FAIL: exit-15 gives an unparseable rule the command-rule history"; FAIL=$((FAIL+1));
+else echo "ok: exit-15 scopes the match-everything history to command(...)"; PASS=$((PASS+1)); fi
 
 # --mode passthrough (agy >= 1.1.0): accept-edits reaches agy; invalid mode errors early
 out=$(STUB_MODE=args "$DELEGATE" --mode accept-edits "hi" 2>/dev/null); rc=$?
@@ -392,10 +435,10 @@ check "usage documents --digest" 0 "$rc" "--digest" "$out"
 out=$(STUB_MODE=big "$DELEGATE" "hi" 2>&1 >/dev/null); rc=$?
 check "dump-sized output -> raw-dump note on stderr" 0 "$rc" "raw dump" "$out"
 out=$(STUB_MODE=text "$DELEGATE" "hi" 2>&1 >/dev/null)
-if printf '%s' "$out" | grep -q "raw dump"; then echo "FAIL: digest guard fired on a small reply"; FAIL=$((FAIL+1));
+if grep -q "raw dump" <<<"$out"; then echo "FAIL: digest guard fired on a small reply"; FAIL=$((FAIL+1));
 else echo "ok: digest guard silent on a small reply"; PASS=$((PASS+1)); fi
 out=$(STUB_MODE=big CLAUDE_PLUGIN_OPTION_DIGEST_WARN_CHARS=0 "$DELEGATE" "hi" 2>&1 >/dev/null)
-if printf '%s' "$out" | grep -q "raw dump"; then echo "FAIL: digest guard fired with digest_warn_chars=0"; FAIL=$((FAIL+1));
+if grep -q "raw dump" <<<"$out"; then echo "FAIL: digest guard fired with digest_warn_chars=0"; FAIL=$((FAIL+1));
 else echo "ok: digest_warn_chars=0 disables the guard"; PASS=$((PASS+1)); fi
 out=$(STUB_MODE=text CLAUDE_PLUGIN_OPTION_DIGEST_WARN_CHARS=5 "$DELEGATE" "hi" 2>&1 >/dev/null); rc=$?
 check "custom digest_warn_chars threshold respected" 0 "$rc" "raw dump" "$out"
@@ -404,7 +447,7 @@ check "custom digest_warn_chars threshold respected" 0 "$rc" "raw dump" "$out"
 out=$(WSL_DISTRO_NAME=Ubuntu "$DELEGATE" --dir /mnt/c/proj --print-command "hi" 2>&1); rc=$?
 check "WSL + /mnt --dir -> slow-mount note" 0 "$rc" "9p bridge" "$out"
 out=$(WSL_DISTRO_NAME=Ubuntu "$DELEGATE" --dir /home/u/proj --print-command "hi" 2>&1); rc=$?
-if printf '%s' "$out" | grep -q "9p bridge"; then echo "FAIL: slow-mount note fired for a Linux-FS --dir"; FAIL=$((FAIL+1));
+if grep -q "9p bridge" <<<"$out"; then echo "FAIL: slow-mount note fired for a Linux-FS --dir"; FAIL=$((FAIL+1));
 else echo "ok: no slow-mount note for a Linux-FS --dir"; PASS=$((PASS+1)); fi
 
 echo "== cloud-debug.sh (Cloud Run log digest engine) =="
@@ -466,18 +509,18 @@ check "agy digest failure -> exit 5" 5 "$rc"
 out=$(GCLOUD_MODE=big STUB_MODE=args CLOUD_DEBUG_MAX_BYTES=50 "$CLOUD" --service svc 2>/dev/null); rc=$?
 check "byte cap -> clip NOTE handed to agy" 0 "$rc" "clipped to 50 bytes" "$out"
 check "byte cap NOTE warns the JSON is now invalid" 0 "$rc" "no longer valid JSON" "$out"
-if printf '%s' "$out" | grep -q "TAIL_SENTINEL"; then
+if grep -q "TAIL_SENTINEL" <<<"$out"; then
   echo "FAIL: payload tail not clipped (sentinel survived the cap)"; FAIL=$((FAIL+1));
 else echo "ok: payload clipped to the cap (tail dropped before agy)"; PASS=$((PASS+1)); fi
 # the cap is BYTE-based, so a multibyte (3-byte/char) payload is clipped too
 out=$(GCLOUD_MODE=bigjp STUB_MODE=args CLOUD_DEBUG_MAX_BYTES=50 "$CLOUD" --service svc 2>/dev/null); rc=$?
 check "byte cap clips a multibyte payload too" 0 "$rc" "clipped to 50 bytes" "$out"
-if printf '%s' "$out" | grep -q "TAIL_SENTINEL"; then
+if grep -q "TAIL_SENTINEL" <<<"$out"; then
   echo "FAIL: multibyte payload tail not clipped (cap counting chars, not bytes?)"; FAIL=$((FAIL+1));
 else echo "ok: multibyte payload clipped (byte-accurate cap)"; PASS=$((PASS+1)); fi
 # under the cap -> no clip NOTE (no false positives on a normal payload)
 out=$(GCLOUD_MODE=logs STUB_MODE=args "$CLOUD" --service svc 2>/dev/null); rc=$?
-if printf '%s' "$out" | grep -q "clipped to"; then
+if grep -q "clipped to" <<<"$out"; then
   echo "FAIL: clip NOTE on a payload under the cap"; FAIL=$((FAIL+1));
 else echo "ok: no clip NOTE when under the cap"; PASS=$((PASS+1)); fi
 
@@ -627,7 +670,7 @@ check "reason names the bad producer"   0 0 "left side of the pipe"   "$(gate_wh
 # does not help either — an API key is name-shaped, which is why nothing is echoed at all.
 leak_free() { # $1 = label, $2 = json command, $3 = marker that must not appear
   local why; why="$(gate_why "$2")"
-  if printf '%s' "$why" | grep -qF "$3"; then
+  if grep -qF "$3" <<<"$why"; then
     echo "FAIL: block reason leaks command text ($1)"; FAIL=$((FAIL+1));
   elif [ -z "$why" ]; then
     echo "FAIL: no reason emitted at all ($1) — the assertion below would pass for free"; FAIL=$((FAIL+1));
@@ -673,10 +716,10 @@ echo "== doctor.sh tier-model check (agy 1.1.5 slug format) =="
 # The stub's `agy models` emits slugs (gemini-3.5-flash); doctor's default tier models are
 # display names (Gemini 3.5 Flash (High)). Regression guard: doctor must still recognize them.
 out=$(bash "$ROOT/scripts/doctor.sh" 2>&1)
-if printf '%s' "$out" | grep -q "tier model not in"; then
+if grep -q "tier model not in" <<<"$out"; then
   echo "FAIL: doctor falsely warns tier model missing against slug-format agy models"; FAIL=$((FAIL+1));
 else echo "ok: doctor recognizes tier models across display-name/slug formats"; PASS=$((PASS+1)); fi
-if printf '%s' "$out" | grep -q "tier model present: Gemini 3.5 Flash (High)"; then
+if grep -q "tier model present: Gemini 3.5 Flash (High)" <<<"$out"; then
   echo "ok: doctor matches default flash tier in slug format"; PASS=$((PASS+1));
 else echo "FAIL: doctor did not confirm the default flash tier present"; FAIL=$((FAIL+1)); fi
 
@@ -695,19 +738,19 @@ ver_doctor() { # $1 = version the stub reports; echoes doctor's output
   chmod +x "$d/agy"
   PATH="$d:$PATH" bash "$ROOT/scripts/doctor.sh" 2>&1
 }
-if printf '%s' "$(ver_doctor 1.1.9)" | grep -q 'ignores --model'; then
+if has 'ignores --model' "$(ver_doctor 1.1.9)"; then
   echo "ok: doctor warns that --tier is inert on agy 1.1.9"; PASS=$((PASS+1));
 else echo "FAIL: no warning on agy 1.1.9 — tier selection is silently doing nothing"; FAIL=$((FAIL+1)); fi
 # 1.1.10 is the fix, and a naive string compare puts it BELOW 1.1.9 — the boundary is
 # the whole point of the check.
-if printf '%s' "$(ver_doctor 1.1.10)" | grep -q 'ignores --model'; then
+if has 'ignores --model' "$(ver_doctor 1.1.10)"; then
   echo "FAIL: doctor warns on 1.1.10, which is the version that fixed it"; FAIL=$((FAIL+1));
 else echo "ok: no warning on agy 1.1.10 (string compare would have got this wrong)"; PASS=$((PASS+1)); fi
-if printf '%s' "$(ver_doctor 1.2.0)" | grep -q 'ignores --model'; then
+if has 'ignores --model' "$(ver_doctor 1.2.0)"; then
   echo "FAIL: doctor warns on 1.2.0"; FAIL=$((FAIL+1));
 else echo "ok: no warning on a later minor (1.2.0)"; PASS=$((PASS+1)); fi
 # An unparseable version must not produce a scary warning on a build we cannot judge.
-if printf '%s' "$(ver_doctor dev-local)" | grep -q 'ignores --model'; then
+if has 'ignores --model' "$(ver_doctor dev-local)"; then
   echo "FAIL: doctor warns on an unparseable version"; FAIL=$((FAIL+1));
 else echo "ok: unparseable version is left alone"; PASS=$((PASS+1)); fi
 # The gate must not depend on `sort -V`. Where that is missing the command substitution
@@ -716,7 +759,7 @@ else echo "ok: unparseable version is left alone"; PASS=$((PASS+1)); fi
 # flagged the dependency; this pins the property rather than the implementation.
 # Strip comments first: the replacement explains WHY it avoids `sort -V`, and an
 # unstripped grep matches that sentence and reports the dependency it removed.
-if sed 's/#.*//' "$ROOT/scripts/doctor.sh" | grep -q 'sort -V'; then
+if grep -q 'sort -V' <(sed 's/#.*//' "$ROOT/scripts/doctor.sh"); then
   echo "FAIL: doctor's version gate depends on sort -V (absent on some shells)"; FAIL=$((FAIL+1));
 else echo "ok: version gate does not depend on sort -V"; PASS=$((PASS+1)); fi
 brk="$TMP/nosort"; mkdir -p "$brk"; printf '#!/bin/sh\nexit 127\n' > "$brk/sort"; chmod +x "$brk/sort"
@@ -731,9 +774,206 @@ chmod +x "$d/agy"
 # failed — so the assertion reads as "no warning" while the warning is right there. This
 # is the 0.21.1 bug, in the file whose tests guard against it.
 nosort_out="$(PATH="$brk:$d:$PATH" bash "$ROOT/scripts/doctor.sh" 2>&1)"
-if printf '%s' "$nosort_out" | grep -q 'ignores --model'; then
+if has 'ignores --model' "$nosort_out"; then
   echo "ok: the warning still fires with sort unusable"; PASS=$((PASS+1));
 else echo "FAIL: a broken sort silences the version gate"; FAIL=$((FAIL+1)); fi
+
+echo "== embedded python is not cut short by a quote =="
+# A single quote inside `python3 -c '...'` closes the shell string. What follows is parsed
+# by bash as arguments and redirections — valid shell, so `bash -n` and shellcheck both
+# pass. The interpreter runs a TRUNCATED program, stderr goes to /dev/null as designed,
+# and the caller reads "nothing to report". A check that silently reports all-clear is the
+# failure mode this release exists to remove, and it happened here: an apostrophe in a
+# COMMENT inside bad_allow_rules disabled the validator while every negative case stayed
+# green. Only the positive cases caught it.
+#
+# The shell string ends at the FIRST quote — that part is unambiguous. What tells a real
+# end from a truncation is what the body ends WITH: a program cut off inside a comment
+# ends on a comment line, and one cut off elsewhere stops compiling. Looking for the
+# closer at the start of a line instead, as the first attempt did, false-positives on
+# hooks/nudge-delegation.sh, where it is at the end of one.
+if python3 "$HERE/check-embedded-python.py" "$ROOT"/scripts/*.sh "$ROOT"/hooks/*.sh; then
+  echo "ok: no embedded python is truncated by a stray quote"; PASS=$((PASS+1));
+else echo "FAIL: an embedded python block is cut short (it runs a partial program)"; FAIL=$((FAIL+1)); fi
+
+echo "== doctor.sh --model probe (ask agy instead of inferring from a version) =="
+# The version gate above can only INFER that --model works. agy 1.1.11 answers the
+# read-only slash commands in print mode without starting an agent turn, so doctor asks
+# outright: request a tier model, see which one comes back. The stub logs whether the
+# probe ran, so "never runs below 1.1.11" is checked as a fact and not as prose.
+probe_doctor() { # $1 = version the stub reports, $2 = what `-p /model` answers ('' = nothing)
+  local d="$TMP/agyprobe"; rm -rf "$d"; mkdir -p "$d"
+  { echo '#!/usr/bin/env bash'
+    echo "[ \"\$1\" = --version ] && { echo '$1'; exit 0; }"
+    echo '[ "$1" = models ] && { printf "%s\n" "Gemini 3.5 Flash (High)" "Gemini 3.5 Flash (Low)" "Gemini 3.1 Pro (High)"; exit 0; }'
+    # Log every /model invocation, whatever position the flag lands in.
+    echo "for a in \"\$@\"; do [ \"\$a\" = /model ] && { echo \"\$*\" >> '$d/probed'; printf '%s\n' '$2'; exit 0; }; done"
+    echo 'exit 0'; } > "$d/agy"
+  chmod +x "$d/agy"
+  HOME="$TMP/probehome" PATH="$d:$PATH" bash "$ROOT/scripts/doctor.sh" 2>&1
+}
+# Below 1.1.11 the probe must not run AT ALL. There `-p /model` is not a command, it
+# falls through as literal prompt text and the model answers as though it had run — so
+# probing would spend a real turn and then believe the answer it invented.
+probe_doctor 1.1.10 "gemini-3.5-flash-high" >/dev/null
+if [ -f "$TMP/agyprobe/probed" ]; then
+  echo "FAIL: doctor probes -p /model on agy 1.1.10, where it costs a real agent turn"; FAIL=$((FAIL+1));
+else echo "ok: no -p /model probe below agy 1.1.11"; PASS=$((PASS+1)); fi
+probe_out="$(probe_doctor 1.1.11 "gemini-3.5-flash-high	Gemini 3.5 Flash (High)")"
+if [ -f "$TMP/agyprobe/probed" ]; then
+  echo "ok: doctor probes -p /model on agy 1.1.11"; PASS=$((PASS+1));
+else echo "FAIL: doctor never asked agy which model it would use"; FAIL=$((FAIL+1)); fi
+# The reply is a tab-separated record; doctor must read the slug and match it against a
+# tier configured as a DISPLAY NAME, which is the comparison that made 2b necessary.
+if has 'model takes effect' "$probe_out"; then
+  echo "ok: probe confirms --model took effect across slug/display-name forms"; PASS=$((PASS+1));
+else echo "FAIL: probe did not confirm a model agy echoed back verbatim"; FAIL=$((FAIL+1)); fi
+# The case the probe exists for: agy answers with something else entirely.
+probe_out="$(probe_doctor 1.1.11 "gemini-3.6-flash-low	Gemini 3.6 Flash (Low)")"
+if has 'does NOT take effect' "$probe_out"; then
+  echo "ok: probe catches agy running a different model than asked for"; PASS=$((PASS+1));
+else echo "FAIL: doctor accepted a model it did not ask for"; FAIL=$((FAIL+1)); fi
+# No answer is not evidence of breakage — an older build than the version claims, a
+# hang, a plan that refuses. Inventing a failure here would send people to fix nothing.
+probe_out="$(probe_doctor 1.1.11 "")"
+# Match on `effect` alone, not on either verdict's wording: the two branches read
+# "takes effect" and "does NOT take effect", so a pattern copied from one of them
+# silently stops guarding the other. Verified by mutation — `take effect` passed this
+# test with the empty-answer branch removed and the confirmation firing on nothing.
+if has 'effect' "$probe_out"; then
+  echo "FAIL: doctor draws a conclusion from an empty probe answer"; FAIL=$((FAIL+1));
+else echo "ok: an empty probe answer produces no verdict either way"; PASS=$((PASS+1)); fi
+
+echo "== doctor.sh permissions.allow validation (agy 1.1.11 zero-word rules) =="
+# The plugin recommends a permissions.allow rule in eight places as the NARROW
+# alternative to --yolo, and the recommendation ships a placeholder. A rule agy cannot
+# parse is silent in both directions: before 1.1.11 it matched EVERY command and
+# auto-approved anything the agent ran — broader than the --yolo it replaced — and from
+# 1.1.11 it matches nothing, so the grant is simply absent. HOME is redirected so this
+# never reads, and can never be confused by, the developer's own settings.json.
+allow_doctor() { # $1 = agy version, $2 = contents of the "allow" array
+  local h="$TMP/allowhome"; rm -rf "$h"; mkdir -p "$h/.gemini/antigravity-cli"
+  printf '{"permissions":{"allow":[%s]}}' "$2" > "$h/.gemini/antigravity-cli/settings.json"
+  local d="$TMP/agyallow"; rm -rf "$d"; mkdir -p "$d"
+  { echo '#!/usr/bin/env bash'
+    echo "[ \"\$1\" = --version ] && { echo '$1'; exit 0; }"
+    echo '[ "$1" = models ] && { printf "%s\n" "Gemini 3.5 Flash (High)" "Gemini 3.5 Flash (Low)" "Gemini 3.1 Pro (High)"; exit 0; }'
+    echo 'exit 0'; } > "$d/agy"
+  chmod +x "$d/agy"
+  HOME="$h" PATH="$d:$PATH" bash "$ROOT/scripts/doctor.sh" 2>&1
+}
+# upstream's own example of a rule that tokenizes to zero command words: `time` is a
+# shell reserved word that prefixes a command without being one.
+allow_out="$(allow_doctor 1.1.11 '"command(time)"')"
+if has 'command(time)' "$allow_out"; then
+  echo "ok: doctor names command(time) as unusable"; PASS=$((PASS+1));
+else echo "FAIL: doctor passed a zero-command-word allow rule"; FAIL=$((FAIL+1)); fi
+# The placeholder is ours: docs and the exit-15 message both say write_file(<dir>).
+allow_out="$(allow_doctor 1.1.11 '"write_file(<dir>)"')"
+if has 'unsubstituted placeholder' "$allow_out"; then
+  echo "ok: doctor catches the write_file(<dir>) placeholder left as written"; PASS=$((PASS+1));
+else echo "FAIL: doctor passed the literal placeholder from its own documentation"; FAIL=$((FAIL+1)); fi
+# A false positive here sends someone to edit a rule that was always fine, so the
+# well-formed case is pinned as hard as the broken ones.
+allow_out="$(allow_doctor 1.1.11 '"command(agy)","command(npm view)","write_file(/tmp/x)"')"
+if has 'permissions.allow:' "$allow_out"; then
+  echo "FAIL: doctor warns about well-formed allow rules"; FAIL=$((FAIL+1));
+else echo "ok: well-formed allow rules produce no warning"; PASS=$((PASS+1)); fi
+# Same broken entry, opposite consequence either side of the fix. Reporting the wrong
+# one is worse than reporting none: "matches nothing" reads as harmless.
+allow_out="$(allow_doctor 1.1.10 '"command(time)"')"
+if has 'matches EVERY command' "$allow_out"; then
+  echo "ok: below 1.1.11 doctor reports the auto-approve-everything consequence"; PASS=$((PASS+1));
+else echo "FAIL: doctor did not report that the rule auto-approves everything on 1.1.10"; FAIL=$((FAIL+1)); fi
+allow_out="$(allow_doctor 1.1.11 '"command(time)"')"
+if has 'matches EVERY command' "$allow_out"; then
+  echo "FAIL: doctor reports the pre-1.1.11 consequence on 1.1.11"; FAIL=$((FAIL+1));
+else echo "ok: on 1.1.11 doctor reports the grant as absent, not as over-broad"; PASS=$((PASS+1)); fi
+# ...and the consequence belongs to the REASON, not to "something was flagged". Only a
+# command(...) rule naming no command has the match-everything history; a mistyped
+# write_file() never did. Both reviewers on #56 caught doctor attaching the security
+# claim to every finding, which put it in front of people it does not describe.
+allow_out="$(allow_doctor 1.1.10 '"write_file(<dir>)"')"
+if has 'matches EVERY command' "$allow_out"; then
+  echo "FAIL: doctor claims a write_file placeholder auto-approves every command"; FAIL=$((FAIL+1));
+else echo "ok: the match-everything consequence is confined to zero-command-word rules"; PASS=$((PASS+1)); fi
+if has 'grants nothing' "$allow_out"; then
+  echo "ok: an unusable rule is still reported as granting nothing"; PASS=$((PASS+1));
+else echo "FAIL: doctor flagged a rule without saying the grant is absent"; FAIL=$((FAIL+1)); fi
+# The placeholder test is the <...> SHAPE. Matching a bare angle bracket anywhere would
+# misread a literal redirect as a template nobody filled in.
+allow_out="$(allow_doctor 1.1.11 '"command(echo hi > /tmp/f)"')"
+if has 'unsubstituted placeholder' "$allow_out"; then
+  echo "FAIL: a literal redirect is misread as an unsubstituted placeholder"; FAIL=$((FAIL+1));
+else echo "ok: a literal > in a rule is not treated as a placeholder"; PASS=$((PASS+1)); fi
+# TWO literal redirects put a < before a >, so "the <...> shape" is not enough on its own
+# — everything between them is a filename. Caught on #56 after the first narrowing.
+allow_out="$(allow_doctor 1.1.11 '"command(sort < in > out)"')"
+if has 'unsubstituted placeholder' "$allow_out"; then
+  echo "FAIL: a pair of literal redirects reads as a placeholder"; FAIL=$((FAIL+1));
+else echo "ok: < ... > spanning a redirect pair is not a placeholder"; PASS=$((PASS+1)); fi
+# ...while the shapes the docs actually ship still have to be caught.
+allow_out="$(allow_doctor 1.1.11 '"write_file(<path/to/repo>)"')"
+if has 'unsubstituted placeholder' "$allow_out"; then
+  echo "ok: a path-shaped placeholder is still caught"; PASS=$((PASS+1));
+else echo "FAIL: narrowing the placeholder test lost <path/to/repo>"; FAIL=$((FAIL+1)); fi
+# Partly substituted counts: the mistake is the same and so is the consequence.
+allow_out="$(allow_doctor 1.1.11 '"write_file(/repos/<name>)"')"
+if has 'unsubstituted placeholder' "$allow_out"; then
+  echo "ok: a placeholder inside an otherwise real path is caught"; PASS=$((PASS+1));
+else echo "FAIL: a partly substituted path passed"; FAIL=$((FAIL+1)); fi
+# Shape alone is not enough. A command rule can legitimately hold an angle-bracketed
+# literal, and this file would rather miss one than send someone to edit a working rule.
+allow_out="$(allow_doctor 1.1.11 '"command(grep -F <TAG> file.txt)"')"
+if has 'unsubstituted placeholder' "$allow_out"; then
+  echo "FAIL: an angle-bracketed literal in a command rule reads as a placeholder"; FAIL=$((FAIL+1));
+else echo "ok: <...> inside a command rule is left alone"; PASS=$((PASS+1)); fi
+
+# A rule may contain a tab or a newline — it is user-supplied JSON. The report is
+# tab-separated, so an entry carrying one used to shift every field after it, and the
+# field that moves is the CLASS: a zero-command-word rule would be read as something else
+# and the security consequence would silently not print. Class goes first now and the
+# entry is escaped.
+allow_out="$(allow_doctor 1.1.10 '"command(#\ta)"')"
+if has 'matches EVERY command' "$allow_out"; then
+  echo "ok: a tab inside a rule does not lose its class"; PASS=$((PASS+1));
+else echo "FAIL: a tab in the rule text dropped the zero-command-word consequence"; FAIL=$((FAIL+1)); fi
+# A newline splits one finding across two lines, and the two orderings fail differently:
+# with the entry LAST the orphan has no rule text and the reader drops it, leaving a count
+# that promises more entries than it names; with the entry FIRST the orphan keeps rule text
+# and prints as a finding with no reason at all. One assertion cannot see both, which is
+# what the reviewers caught — an earlier pass here dropped the empty-reason check after
+# mutating only the escaping, and a full revert of the ordering then went unnoticed.
+allow_out="$(allow_doctor 1.1.11 '"write_file(<dir>)\nwrite_file(/x)"')"
+claimed="$(printf '%s' "$allow_out" | sed -n 's/.*permissions.allow: \([0-9]*\) entry.*/\1/p')"
+# Scope to the findings block: doctor's own prose uses em dashes all over the output.
+listed="$(printf '%s' "$allow_out" | sed -n '/permissions.allow: /,/an entry agy cannot use grants/p' | grep -c ' — ')"
+if [ "${claimed:-0}" = "$listed" ]; then
+  echo "ok: a newline inside a rule does not inflate the reported count"; PASS=$((PASS+1));
+else echo "FAIL: header claims $claimed entries but names $listed"; FAIL=$((FAIL+1)); fi
+if printf '%s' "$allow_out" | grep -qE '^ +[^ ]+ — *$'; then
+  echo "FAIL: a newline in a rule produced a finding with no reason"; FAIL=$((FAIL+1));
+else echo "ok: a newline inside a rule leaves no reasonless finding"; PASS=$((PASS+1)); fi
+
+# The three shapes upstream names, all claimed in the CHANGELOG and none previously
+# exercised here — the "claim not backed by a test" gap this release keeps closing.
+allow_out="$(allow_doctor 1.1.10 '"command()"')"
+if has 'matches EVERY command' "$allow_out"; then
+  echo "ok: command() is classed with the zero-command-word rules"; PASS=$((PASS+1));
+else echo "FAIL: command() did not get the zero-command-word consequence"; FAIL=$((FAIL+1)); fi
+allow_out="$(allow_doctor 1.1.10 '"()"')"
+if has 'matches EVERY command' "$allow_out"; then
+  echo "ok: a bare () is classed with the zero-command-word rules"; PASS=$((PASS+1));
+else echo "FAIL: () did not get the zero-command-word consequence"; FAIL=$((FAIL+1)); fi
+allow_out="$(allow_doctor 1.1.10 '"command(# just a note)"')"
+if has 'matches EVERY command' "$allow_out"; then
+  echo "ok: a comment-only rule is classed with the zero-command-word rules"; PASS=$((PASS+1));
+else echo "FAIL: a comment-only rule did not get the consequence"; FAIL=$((FAIL+1)); fi
+# An empty body on a NAMED matcher is unusable but never matched everything.
+allow_out="$(allow_doctor 1.1.10 '"write_file()"')"
+if has 'matches EVERY command' "$allow_out"; then
+  echo "FAIL: write_file() was given the command-rule history"; FAIL=$((FAIL+1));
+else echo "ok: write_file() is unusable without the match-everything claim"; PASS=$((PASS+1)); fi
 
 echo "== doctor.sh stdio-MCP detection (issue #37 diagnostic) =="
 # The hint is diagnostic-only, so getting it wrong fails SILENTLY — it just never
@@ -934,7 +1174,7 @@ out=$("$JOB" status "$id" 2>/dev/null); rc=$?
 check "job status shows running" 0 "$rc" "running" "$out"
 
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
-  printf '%s' "$("$JOB" status "$id" 2>/dev/null)" | grep -q "state=done" && break
+  grep -q "state=done" <<<"$("$JOB" status "$id" 2>/dev/null)" && break
   sleep 0.5
 done
 out=$("$JOB" result "$id" 2>/dev/null); rc=$?
@@ -943,21 +1183,21 @@ check "job result -> output when done" 0 "$rc" "STUB_OK" "$out"
 cid=$(STUB_MODE=text STUB_SLEEP=10 "$JOB" start --tier flash "long task" 2>/dev/null)
 sleep 0.5; "$JOB" cancel "$cid" >/dev/null 2>&1; sleep 0.5
 out=$("$JOB" status "$cid" 2>/dev/null)
-if printf '%s' "$out" | grep -q "state=running"; then
+if grep -q "state=running" <<<"$out"; then
   echo "FAIL: job cancel (still running)"; FAIL=$((FAIL+1))
 else echo "ok: job cancel stops it"; PASS=$((PASS+1)); fi
 
 # structured exit code surfaces through the job layer (quota -> rc 10 + label + signal)
 qid=$(STUB_MODE=quota "$JOB" start --tier flash "quota task" 2>/dev/null)
 for _ in 1 2 3 4 5 6 7 8; do
-  "$JOB" status "$qid" 2>/dev/null | grep -q "rc=10" && break
+  js="$("$JOB" status "$qid" 2>/dev/null)"; grep -q "rc=10" <<<"$js" && break
   sleep 0.5
 done
 out=$("$JOB" status "$qid" 2>/dev/null)
 # require the rendered rc LABEL (guards the rc-from-file fix), not just the signal line
-if printf '%s' "$out" | grep -q "rc=10: QUOTA"; then echo "ok: job renders rc=10 label"; PASS=$((PASS+1));
+if grep -q "rc=10: QUOTA" <<<"$out"; then echo "ok: job renders rc=10 label"; PASS=$((PASS+1));
 else echo "FAIL: job did not render 'rc=10: QUOTA' label (got: $out)"; FAIL=$((FAIL+1)); fi
-if printf '%s' "$out" | grep -q "QUOTA_EXHAUSTED"; then echo "ok: job shows AGY_SIGNAL"; PASS=$((PASS+1));
+if grep -q "QUOTA_EXHAUSTED" <<<"$out"; then echo "ok: job shows AGY_SIGNAL"; PASS=$((PASS+1));
 else echo "FAIL: job did not surface AGY_SIGNAL"; FAIL=$((FAIL+1)); fi
 
 echo "== CI workflow invariants =="
@@ -971,20 +1211,20 @@ echo "== CI workflow invariants =="
 # ANY human comment kill an in-flight review (#52). It needs both guards.
 QW="$ROOT/.github/workflows/quorum-review.yml"
 CONC="$(sed -n '/^concurrency:/,/^permissions:/p' "$QW")"
-if printf '%s' "$CONC" | grep -q "cancel-in-progress: *true"; then
+if grep -q "cancel-in-progress: *true" <<<"$CONC"; then
   echo "FAIL: quorum cancel-in-progress is bare true — the review will cancel itself"; FAIL=$((FAIL+1));
 else echo "ok: quorum cancel-in-progress is an expression"; PASS=$((PASS+1)); fi
 # Cancel ONLY on a push. `cancel-in-progress: false` queues the new run rather than
 # discarding it, so nothing else ever needs to cancel — a comment or a dispatch waits its
 # turn. This is what makes the expression safe without replicating the job's `if:`.
-if printf '%s' "$CONC" | grep -q "github.event_name == 'pull_request'"; then
+if grep -q "github.event_name == 'pull_request'" <<<"$CONC"; then
   echo "ok: cancel-in-progress cancels only on a push"; PASS=$((PASS+1));
 else echo "FAIL: cancel-in-progress no longer keys on pull_request alone"; FAIL=$((FAIL+1)); fi
 # The design decision, asserted directly: the moment this expression starts reasoning
 # about WHO commented or WHAT they said, it is predicting whether the job will run — and
 # it was broader than the job's `if:` on both previous attempts (#42, #53), which is how
 # a run that gets skipped ends up cancelling a live review.
-if printf '%s' "$CONC" | grep -qE 'comment\.(body|user|author_association)'; then
+if grep -qE 'comment\.(body|user|author_association)' <<<"$CONC"; then
   echo "FAIL: concurrency inspects the comment again — it must not predict the job condition"; FAIL=$((FAIL+1));
 else echo "ok: concurrency does not try to predict whether the job will run"; PASS=$((PASS+1)); fi
 

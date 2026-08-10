@@ -3,6 +3,160 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.22.5
+- **`doctor` now asks agy which model it will run, instead of inferring it from a version
+  string.** 0.22.4 added a warning for agy below 1.1.10, where `--model` was ignored in
+  headless `-p`. That warning is the best a version comparison can do, and a version
+  comparison is a proxy: it is right about the releases we know about and silent about
+  every other way the flag can fail to land. agy 1.1.11 answers the read-only slash
+  commands in print mode without starting an agent turn, so `doctor` requests a tier model
+  with `-p /model` and reports which one comes back — `usage.total_tokens: 0`, no quota
+  spent, no conversation left behind. It reads the tab-separated reply's slug and matches
+  it against a tier configured as a display name, the same either-direction comparison
+  `agy models` needed in 0.20.x.
+  **Gated at 1.1.11 and tested as a fact, not as prose.** Below that version the slash
+  command is not recognised, falls through as literal prompt text, and the model answers as
+  though it had run — so probing there would spend a real turn *and* then trust the answer
+  it invented. The stub agy in the suite logs every invocation, so "never probes below
+  1.1.11" is asserted against the log. An empty answer draws no conclusion in either
+  direction: an older build than the version claims, a hang, or a plan that refuses the
+  probe is not evidence that routing is broken.
+- **`doctor` validates `permissions.allow` entries.** The plugin recommends such a rule in
+  eight places as the *narrow* alternative to `--yolo`, and the recommendation ships a
+  placeholder — `write_file(<dir>)`. A rule agy cannot parse announces itself in neither
+  direction, and which way it fails depends on the version: from **1.1.11** it matches
+  nothing, so the grant is absent and the write is soft-denied (exit 15) with the rule
+  sitting visibly in the file; **before 1.1.11** an entry that tokenized to zero command
+  words matched **every** command and silently auto-approved anything the agent ran —
+  broader than the `--yolo` it was chosen instead of. `doctor` flags the entry, names the
+  reason, and scopes the consequence **twice**: to your agy version, and to the reason.
+  Every class means the grant is absent; only a `command(...)` rule naming no command also
+  carries the match-everything history, so that sentence is printed only when such an entry
+  is actually present. A mistyped `write_file()` never had it, and putting a security claim
+  in front of someone holding one would be worse than saying less. (Both reviewers caught
+  the first cut attaching it to every finding.)
+  The zero-command-word test follows upstream's own examples (`command(time)` — a shell
+  reserved word that prefixes a command without being one — a comment-only entry, and an
+  empty compound `()`), plus the unsubstituted `<...>` placeholder, which is ours — matched
+  as that *shape*, not as a bare angle bracket, so a rule carrying a literal redirect
+  (`command(echo hi > /tmp/f)`) is not misread as a template nobody filled in. Rules it
+  cannot judge are left alone: unbalanced quotes are agy's parser's business, and
+  `write_file(...)` is a different matcher from `command(...)`. A false positive here sends
+  someone to edit a rule that was always fine, so the well-formed case is pinned as hard as
+  the broken ones.
+- **Verified against agy 1.1.11, no change needed:** all three tiers still resolve
+  (`flash` → `gemini-3.5-flash-high`, `flash-lo` → `-low`, `pro` → `gemini-3.1-pro-high`);
+  the exit-14 classifier still fires on an unknown model; and 1.1.11's reworded
+  model-loading errors do not disturb the exit-15 path, whose message still contains
+  `auto-denied` and `permissions.allow` verbatim — two independent anchors the classifier
+  already matches.
+  **`/usage` and `/quota` were considered for `doctor` and rejected on evidence:** they
+  return zero bytes here, which is not a bug but this account type — 1.1.11's own notes say
+  credits do not apply to accounts signed in through a Google Cloud project or ADC.
+  `/model`, `/effort` and `/skills` all return data on the same setup, which is what made
+  the probe above possible.
+- **The suite had a false-negative construct in 25 assertions, and this release woke it
+  up.** `printf '%s' "$x" | grep -q PAT` is the shape fixed in 0.21.1 and explained in a
+  comment in this very file: `grep -q` exits at the first match and closes the pipe, the
+  writer dies of SIGPIPE (141), and `set -o pipefail` marks the whole pipeline failed — so
+  the assertion reads "not found" while the text is right there. The window is whatever the
+  writer still has to emit *after* the matched line, which is why it survives review and
+  why adding output below a match can revive it: the 1.1.9 version-gate assertion started
+  failing 1–4 times in 8 concurrent runs on this branch and never on master.
+  Diagnosed rather than guessed. Instrumenting the *test* made it vanish (it changes the
+  timing), so the trace went inside `doctor` instead: `mktemp` never failed and `AGY_VER`
+  was never empty, which left only the assertion misreading output that had in fact been
+  printed. All 25 now use a `case`-based `has()` — same test, no second process, no pipe —
+  and the five `sed … | grep -q` source scans give `grep` a process substitution instead,
+  so `sed`'s death is no longer `pipefail`'s business. Those five failed **silently**: a
+  false negative there reads as "the property holds", and among them are the guards for
+  the delegate wrapper's `--help` probe, `agy_guard`'s pipe rule, and the `sort -V`
+  dependency. 24 consecutive clean runs at the concurrency that reproduced it; each
+  converted scan re-checked by mutation.
+  **That fix then shipped the same defect in a new shape, and both reviewers caught it.**
+  `has()` was defined beside the doctor tests, above which two call sites already sat —
+  and bash does not hoist, so those two were `command not found`, exit 127, `else` taken
+  unconditionally, `ok` printed regardless. One of them was the "json envelope leaked to
+  stdout" assertion, which had already been voided once before by a different accident.
+  Helpers now live at the top of the file, and `tests/check-helper-order.py` runs first
+  and fails the suite if any function is called above its definition. bash 4's
+  `command_not_found_handle` was tried for this and **removed**: macOS ships bash 3.2,
+  where merely defining it is a silent no-op — a guard that reads as protection and
+  provides none, which is the defect this whole entry is about. The static check works on
+  any shell and was verified by putting the original bug back: it names the call site and
+  the definition line. Its first regex missed `elif`, a call inside a `case` branch, and a
+  brace group — all three confirmed against the old pattern — so it now splits the line
+  into command segments and compares each segment's first word, with no list of contexts
+  to keep complete. The checker has its own tests, including a no-false-positive case,
+  because a guard that misses a shape is the defect it exists to prevent. It also flagged
+  its own test data, which is fair: a fixture written across real lines is not
+  distinguishable from code, so the fixtures are single-line now.
+- **The exit-15 message now points at the rule itself.** It is the one place someone
+  actually lands when a write is soft-denied, and it recommended `permissions.allow`
+  without allowing that the rule *is* the problem: "if a rule is ALREADY in that file and
+  you are still reading this, suspect the rule: run `agy-doctor`". Same caveat added to
+  `agents/antigravity-delegate.md` and `commands/delegate.md`, the two operational files
+  consulted while building a delegation call. The pre-run write nudge got the short half only — `<dir>` is a placeholder, `agy-doctor` will say whether yours parses — because that one fires on every write-looking task, while the diagnosis belongs where the failure is.
+  **And the same overclaim the code fix removed was still sitting in the prose it was
+  copied from.** Five documents put the placeholder caveat next to the pre-1.1.11
+  match-everything history, which reads as though a mistyped `write_file(<dir>)` carried
+  it — the exact conflation `bad_allow_rules` classifies apart (`unparseable`, not
+  `zerowords`). Fixing the output and leaving the sentence that produced it just relocates
+  the error, so all five now say the placeholder grants nothing on any version and name
+  `command(...)` explicitly for the part that is version-sensitive.
+- **The remaining 24 piped assertions are converted too, because the direction that was
+  left is the dangerous one.** Review flagged them as a follow-up on the grounds that they
+  are positive matches, where a SIGPIPE produces a noisy false FAIL. A scan says the
+  opposite: 17 of them are *negative* assertions, and SIGPIPE is only possible when
+  `grep -q` finds a match and exits early — which for a negative assertion is exactly the
+  moment it is supposed to fail. They cannot flake in CI, because they only break when
+  they have a real bug to report. Each becomes `grep … <<<"$x"`: a here-string has no
+  writer process to kill and the pipeline is one command, so `pipefail` has nothing to
+  poison, and `-F` / `-i` / `-E` / BRE semantics survive untouched — unlike a rewrite to
+  `case`. Verified by mutation on both the plain and the `-qE` alternation forms.
+  The first pass at this shipped a regex that truncated a grep pattern at a `)` inside it,
+  producing valid shell that searched for the wrong string and hung a polling loop. Caught
+  because the suite stopped completing, not because anything reported it.
+- **A quote in a *comment* disabled the whole allow-rule validator, and only the positive
+  tests noticed.** A single quote inside `python3 -c '...'` closes the shell string; bash
+  parses the rest as arguments and redirections, which stays valid shell, so `bash -n` and
+  shellcheck both pass, python runs a truncated program, and — with stderr on `/dev/null`
+  as these blocks have — the caller reads "nothing to report". Every *negative* allow-rule
+  test still passed. `tests/check-embedded-python.py` now runs over `scripts/` and `hooks/`
+  and fails the suite on either signature of a truncation: a body ending on a comment line
+  (where an apostrophe in prose lands) or one that no longer compiles (where an apostrophe
+  in code lands). Both verified by mutation. The first attempt looked for the closing quote
+  at the start of a line and false-positived on `hooks/nudge-delegation.sh`, where it sits
+  at the end of one — the shell string ends at the FIRST quote, and that is the only part
+  of this that is unambiguous.
+- **Three claims in this entry now have tests behind them.** `command()`, a bare `()` and a
+  comment-only rule were named as the zero-command-word examples and exercised by nothing;
+  `write_file()` was described as *not* carrying that history and likewise untested. All
+  four are pinned now, along with a partly-substituted path (`write_file(/repos/<name>)`,
+  flagged) and an angle-bracketed literal inside a command rule (`command(grep -F <TAG>
+  file.txt)`, left alone). That last one narrowed the placeholder test: shape alone is not
+  enough, so it is applied only outside `command(...)`, where shell syntax lives and where
+  the placeholder is never recommended. The cost is a placeholder inside a command rule
+  going unflagged — a miss, which this file prefers to a false positive that sends someone
+  to edit a working rule.
+- **The report is tab-separated and a rule is user-supplied JSON**, so an entry containing
+  a tab shifted every field after it — and the field that moves is the *class*, which
+  decides whether the security consequence prints at all. A newline was worse: it split one
+  finding across two lines, and the reader dropped the orphan while the count still counted
+  it, so the header promised more entries than it named. Class goes first now and the entry
+  is escaped. The two orderings fail *differently*, and one assertion cannot see both: with
+  the entry last the orphan line has no rule text, the reader drops it, and only the count
+  is wrong; with the entry first the orphan keeps rule text and prints as a finding with no
+  reason. An earlier pass here dropped the empty-reason check after mutating only the
+  escaping and concluding it pinned nothing — reverting the *ordering* then went unnoticed,
+  which both reviewers caught. Both assertions are in, each verified against the mutation
+  the other misses.
+- **And the exit-15 message, a `.sh`, was missed by the sweep that fixed the same overclaim
+  in five `.md` files.** It told anyone who reached it that "an entry agy cannot parse
+  grants nothing (and before agy 1.1.11 granted everything)" — handing the command-rule
+  history to the `write_file(<dir>)` placeholder it had named two sentences earlier. Now
+  scoped, and pinned by a test, which is what the five documents still lack.
+
 ## 0.22.4
 - **`--tier` did nothing on agy below 1.1.10, and nothing said so.** agy 1.1.10 fixed
   `--model` and `--effort` being *ignored in headless `-p`* — the flag was applied after

@@ -104,6 +104,13 @@ After each lever: rerun the task → rerun the gate → keep only if quality hel
   - **`permissions.allow` in `~/.gemini/antigravity-cli/settings.json`** — a
     `write_file(<dir>)` entry allows writes **recursively beneath `<dir>`** and needs no
     flag. This is the narrower grant and usually the right one.
+    **`<dir>` is a placeholder — substitute a real path**, and run `agy-doctor` before a
+    measured run. Left as written the rule grants nothing on any version, so the write is
+    soft-denied with the rule sitting visibly in the file. A separate mistake — a
+    `command(...)` rule naming no command — matched **every** command before **agy
+    1.1.11**, silently auto-approving anything the agent ran. Either one makes an arm's
+    write behaviour a second uncontrolled variable, which is exactly what §5 says a cost
+    claim cannot carry.
   - **`--yolo`** (`--dangerously-skip-permissions`) — auto-approves **all** tools, not just
     writes. Needed when no rule covers the target, and for web / Vertex AI Search / terminal
     tools.
