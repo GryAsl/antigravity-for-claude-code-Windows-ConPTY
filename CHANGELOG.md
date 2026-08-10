@@ -3,6 +3,48 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.22.3
+- **The bash gate now says *why* it blocked** ([#51](https://github.com/yuting0624/antigravity-for-claude-code/issues/51),
+  reported by @potch8228 with a six-case repro table that reproduced exactly).
+  `hooks/validate-delegate-bash.sh` rejects an unquoted newline — correctly, since a bare
+  newline separates commands in bash — but `BLOCK_MSG` was **one fixed string for every
+  rejection**, and the header comment listed the metacharacters it rejects without mentioning
+  newline. So a command refused for a stray trailing `\n` returned character-for-character the
+  same message as one refused for not being `agy-delegate` at all. A caller could not tell
+  "harmless formatting" from "you tried to run something else", and retried the same shape.
+  The gate knew the reason at the moment it decided and threw it away. It now prints it to
+  stderr — the path `BLOCK_MSG` already uses, which Claude Code feeds back to the agent —
+  naming the newline and the remedy, the specific metacharacter, command substitution
+  (including inside double quotes), an unterminated quote, a wrong `argv[0]`, too many pipes,
+  or a non-allowlisted pipeline producer.
+  **The reason never quotes ANY of the command back** — not even `argv[0]`. It lands in the
+  agent's context and a blocked command routinely carries a delegation prompt; a character
+  name and an offset are enough. `argv[0]` looks like a safe exception and is not: `head()`
+  returns `shlex.split(seg)[0]`, the first shell *word*, so `"some prompt text" agy-delegate
+  ...` makes attacker-chosen content `argv[0]`. Restricting it to name-shaped tokens does not
+  help either — an API key is name-shaped. Caught by **both** PR reviewers, whose finding also
+  exposed that the test written to cover it could not fail: it placed the marker after a valid
+  `argv[0]` and behind a `;`, so the scan rejected the command first and the branch under test
+  never ran. Five replacement cases now exercise the branches directly.
+- **Leading and trailing whitespace is stripped before scanning.** Line 45 already computed
+  `cmd.strip()` to test for emptiness and discarded it. bash ignores surrounding whitespace, so
+  this cannot change what a command does, and a newline with nothing after it cannot begin a
+  second one — it is the case you hit whenever a command is composed programmatically.
+  **Internal newlines are untouched and still blocked**: `agy-delegate\n  "hi"` is genuinely two
+  commands, so the reporter's case 6 does *not* flip, and neither does a newline after an
+  unquoted pipe. Stripping also cannot rescue an unterminated quote.
+  Not taken: allowing a newline immediately after an unquoted `|`. Safe in isolation, but it
+  means editing the scanner's state machine rather than normalising before it — a different
+  risk class on the one file that is the only restriction on what the delegate subagent may
+  run, and change one already tells the caller how to fix it.
+- Verified the block set did not move: 22 representative payloads produce identical verdicts
+  before and after, and only the three intended whitespace cases flip. **23 new tests**
+  (191 → 214): 11 fail against the gate as it was, 5 fail against this change's own first
+  attempt, and the rest pin behaviour that must not regress — an internal newline, a newline
+  after an unquoted pipe, an unbalanced quote, and an escaped backslash followed by a bare
+  newline (which is *not* a line continuation, and which the first version of that test got
+  wrong).
+
 ## 0.22.2
 - **Correction: `--yolo` is not the only way to grant a headless write, and we said it was
   in eight places.** A `write_file(<dir>)` entry under `permissions.allow` in
