@@ -97,21 +97,25 @@ wrapper and `agy-doctor` warn when they detect this.
 ## agy says "done" but wrote no files (or wrote them somewhere else)
 
 **Cause:** write tasks need write permission, and headless agy's no-permission behavior
-has changed across versions — but in every case **your workspace stays untouched while the
-run still "succeeds"** ([#10](https://github.com/yuting0624/antigravity-for-claude-code/issues/10)):
+has changed across versions. **Your workspace stays untouched every time**; what varies is
+whether the run admits it ([#10](https://github.com/yuting0624/antigravity-for-claude-code/issues/10)):
 - pre-1.1.0: only *describes* the edits
 - 1.1.0–1.1.2: writes to its **own scratch dir** (`~/.gemini/antigravity-cli/scratch/`)
-- 1.1.3+: **soft-denies** the write and prints a stderr notice naming the allow-rule
+- 1.1.3–1.1.1x: **soft-denies** — rc 0, empty stdout, a stderr notice naming the allow-rule
+- by **1.1.13**: **hard error** — the run fails (rc 1) with `permission check failed for
+  write_file "...": user denied permission for write_file(...)`. Same cause, different
+  shape, and none of the older wording. The wrapper classifies both as **exit 15**; a
+  plugin before 0.24.0 reports the hard one as a bare `agy exited 1` instead
 
 **Fix:**
 - **For a file write, add an allow-rule — the narrower fix.** In
   `~/.gemini/antigravity-cli/settings.json`, under `permissions.allow`, add
   `write_file(<dir>)`. It matches **recursively beneath `<dir>`** and needs no flag.
-  This is the rule agy's own soft-deny message is naming. Confirmed on agy 1.1.9 by a
+  This is the rule agy's own denial message is naming. Confirmed on agy 1.1.9 by a
   controlled A/B ([#37](https://github.com/yuting0624/antigravity-for-claude-code/issues/37));
   a glob form (`write_file(/path/**)`) was reported *not* to match.
   **Substitute a real path for `<dir>`** — and if the rule is in place and the write is
-  *still* soft-denied, suspect the rule before suspecting agy. An entry agy cannot parse
+  *still* denied, suspect the rule before suspecting agy. An entry agy cannot parse
   grants nothing on any version, which is exactly this exit 15 with the rule sitting
   right there in the file. Only one shape of mistake is version-sensitive, and it is not
   this one: a `command(...)` rule naming no command — `command(time)`, a comment-only
@@ -120,14 +124,14 @@ run still "succeeds"** ([#10](https://github.com/yuting0624/antigravity-for-clau
   consequence that actually applies to yours.
 - **Or pass `--yolo`** (`--dangerously-skip-permissions`) — works across all agy versions,
   but auto-approves **all** tools, not just the write. Required anyway for web / Vertex AI
-  Search / terminal when no rule covers them. (`--mode accept-edits` only wrote headless on
-  1.1.0–1.1.2 and is soft-denied on 1.1.3 — don't rely on it.)
+  Search / terminal when no rule covers them. (`--mode accept-edits` is NOT a headless write grant. Measured on agy 1.1.13 — where the flag is actually applied, since 1.1.12 fixed `--mode` being ignored in headless `-p` entirely — the write is denied exactly like one without it. Earlier notes here said "soft-denied on 1.1.3"; on a build where the flag was never applied, that observation could not tell a denial apart from the flag doing nothing.)
 - Claude Code may prompt for (or in auto-mode, block) `--dangerously-skip-permissions` —
   approve it, or pre-allow `Bash(agy-delegate*)` in your permission settings.
 - Run write tasks on a **dedicated branch** (add `--sandbox` for containment).
 - **Always verify files actually changed in your workspace** (`git status`) — never trust
-  the self-report. The wrapper maps a 1.1.3 soft-deny to **exit 15** so you get an
-  actionable message instead of a bare "empty output".
+  the self-report. The wrapper maps BOTH denial shapes — the 1.1.3 soft-deny and the
+  1.1.13 hard error — to **exit 15**, so you get an actionable message instead of a
+  bare "empty output" or "agy exited 1".
 - Long write tasks can exceed Claude Code's ~2-min synchronous Bash limit → run them as a
   background job: `ID=$(agy-job start --tier pro --dir . "<task>")`, then
   `/antigravity:status` / `/antigravity:result <id>` (interactive sessions only).
@@ -150,7 +154,7 @@ On classifiable failures the wrapper prints a machine-readable line to stderr:
 | 12 | timeout (agy's own, or the wall-clock guard) | raise `--timeout`, narrow the task; on Windows see the hang section above |
 | 13 | agy not on PATH | install the Antigravity CLI |
 | 14 | model unavailable | the `--model` / `tier_*` / `default_model` name isn't in `agy models` (agy ≥ 1.1.2 hard-fails instead of silently downgrading) — run `agy models` and fix the name |
-| 15 | permission denied | agy ≥ 1.1.3 soft-denied a tool needing permission in headless mode (e.g. a file write) — add a `permissions.allow` rule covering the target, or pass `--yolo`; run on a branch |
+| 15 | permission denied | a tool needed permission headless — **both** shapes: agy 1.1.3's soft deny (rc 0, empty stdout) and 1.1.13's hard error (`user denied permission`). Add a `permissions.allow` rule covering the target, or pass `--yolo`; run on a branch |
 | 16 | python3 not on PATH (`agy-migrate` only) | install python3 (`brew install python3`) |
 | 17 | one or more migration steps failed (`agy-migrate` only) | read the named steps; the run is still revertible with `agy-migrate --uninstall --apply` |
 | 18 | prerequisite missing (`agy-migrate` only) | no Claude Code config dir, or agy has never been run |
