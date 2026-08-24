@@ -3,6 +3,54 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.25.1
+
+The `--sandbox` follow-up 0.25.0 deferred, now that agy runs again — and the answer is no.
+
+- **`--sandbox` is not containment, and four documents were recommending it as such.**
+  0.25.0 held it back because agy was failing every run with an eligibility error and this
+  repository does not ship behavioural changes it cannot measure. Measured now, on macOS
+  with agy 1.1.19: **with `--yolo`, the flag changes nothing.** A write to an absolute path
+  *outside* `--dir` succeeded (rc 0, 8 bytes, verified by content), `id` ran and returned a
+  real uid, and `curl https://example.com` returned 200 — identical with and without it.
+  agy's own `--help` says "terminal restrictions"; whatever it restricts, it is not those,
+  not in this combination. Not tested on Linux, and the claim is scoped to what was run.
+  Withholding it in 0.25.0 turned out to be the right call for the wrong reason: it would
+  have been a flag that reads as containment and provides none, which is the exact shape
+  this repository keeps having to remove.
+- **The warning 0.25.0 added to `agy-media` understated the exposure.** It said `--dir`
+  exposes the containing directory. The same measurement shows `--dir` is not a boundary —
+  it is where agy starts looking. `--yolo` is a grant over the **whole machine**, and the
+  message says that now.
+- Two guards, both mutation-verified: no user-facing file may recommend `--sandbox` as
+  containment, and the media warning must say the grant covers the machine.
+  **The containment rule needed five shapes; four were killed by a mutation, not by reading.** Matching
+  per line exempted any line containing "is not" — and the measurement sentence pasted
+  after the claim says "it is not those", so re-adding "adds containment" passed. Per line
+  with the negation required *adjacent* to the word fixed that and then missed a claim
+  split across a wrap, which is how prose is written. Two-line windows fixed the wrap and
+  then exempted a bad sentence sitting beside a good one, because the neighbour's negation
+  satisfied the whole window. `tests/check-sandbox-claims.py` judges **sentences**, so each
+  claim carries its own negation or none — and adjacent PAIRS are judged too, after a
+  fourth mutation showed a claim can be spread across two sentences ("Add `--sandbox` for
+  isolation. It contains the untrusted commands."), which neither half trips alone. Both
+  passes run and neither subsumes the other. The negation also accepts contractions:
+  requiring the literal word would have flagged "`--sandbox` doesn't contain the agent",
+  a *correct* sentence, which is the opposite failure and the one that gets a checker
+  deleted. It does NOT catch a claim spread over three or more sentences, and that is left
+  alone on purpose: a window of N is beatable at N+1, so widening is a race the checker
+  cannot win, and each widening adds false-positive surface. It guards against drift; it
+  is not a proof. All six shapes are pinned by the checker's own tests — and the contraction case
+  had to be rewritten, because its first version said "does not contain anything; it
+  doesn't contain the agent", where the bare "not" matched first and the case passed with
+  contraction support deleted outright. Both reviewers caught that independently.
+- The comments in `agy-media.sh` and the test block still framed the exposure as the
+  containing directory, directly above the new text saying the opposite, and `SKILL.md`'s
+  recipes still passed `--yolo --sandbox` — teaching a flag the same file had just called
+  useless. Both found in review.
+
+298 -> 305.
+
 ## 0.25.0 — security
 
 Fixes **GHSA-hwv2-vjgj-8rcv** (CVSS 8.6), reported privately by @Valkyness with

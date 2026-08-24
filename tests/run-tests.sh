@@ -845,16 +845,58 @@ out=$(env -u CLAUDE_PLUGIN_ROOT "$BIN/measure-session" 2>&1 | head -1)
 case "$out" in *measure-session*) echo "ok: bin/measure-session forwards to the .py"; PASS=$((PASS+1));;
   *) echo "FAIL: bin/measure-session did not forward (got: '$out')"; FAIL=$((FAIL+1));; esac
 
+echo "== --sandbox is not sold as containment =="
+# 0.25.0 deferred adding --sandbox to agy-media because agy could not run. It runs now,
+# and the measurement killed the idea: under --yolo a write to an absolute path OUTSIDE
+# --dir succeeded, `id` ran, curl reached the network — identical with and without the
+# flag. Four documents were recommending it "for containment", which is the shape this
+# repo keeps having to remove: a guard that reads as protection and provides none.
+#
+# The rule went through three shapes before it worked, each failing a real mutation:
+# per line missed a claim split across a wrap; two-line windows fixed that and then
+# exempted a bad sentence sitting beside a good one, because the neighbour's negation
+# satisfied the window. check-sandbox-claims.py judges SENTENCES, so each claim carries
+# its own negation or none.
+if python3 "$HERE/check-sandbox-claims.py" "$ROOT"/README.md "$ROOT"/docs/*.md \
+     "$ROOT"/skills/*/SKILL.md "$ROOT"/agents/*.md "$ROOT"/commands/*.md \
+     "$ROOT"/scripts/*.sh "$ROOT"/hooks/*.sh; then
+  echo "ok: nothing recommends --sandbox as containment"; PASS=$((PASS+1));
+else echo "FAIL: --sandbox described as containment (see above)"; FAIL=$((FAIL+1)); fi
+# The checker is itself the guard, so a shape it misses is a silent pass. All three that
+# bit the inline versions are pinned, plus the negated form that must stay clean.
+sbc_case() { # $1 = label, $2 = expected rc, $3 = file body
+  local f="$TMP/sbc-$1.md"; printf '%b\n' "$3" > "$f"
+  python3 "$HERE/check-sandbox-claims.py" "$f" >/dev/null 2>&1; local rc=$?
+  if [ "$rc" = "$2" ]; then echo "ok: sandbox-claim checker — $1"; PASS=$((PASS+1));
+  else echo "FAIL: sandbox-claim checker — $1 (rc=$rc, want $2)"; FAIL=$((FAIL+1)); fi
+}
+sbc_case one-line   1 'Run on a branch. Add `--sandbox` for real containment of the agent.'
+sbc_case wrapped    1 'Run on a branch. Add `--sandbox` for real\ncontainment of the agent.'
+sbc_case beside-ok  1 '`--sandbox` is *not* containment: measured.\nAdd `--sandbox` for real containment.'
+sbc_case split-pair 1 'Add `--sandbox` for isolation. It contains the untrusted commands.'
+sbc_case negated    0 'The `--sandbox` flag is not containment. It was measured and it is not those.'
+# A contraction is still a negation. Requiring the literal word would flag a CORRECT
+# sentence, which is the opposite failure and the one that gets a checker deleted.
+#
+# ONLY the contraction — no bare "not" or "never" anywhere in it. The first version of
+# this case read "does not contain anything; it doesn't contain the agent", where the
+# earlier bare "not" matched first and the case passed with contraction support deleted
+# outright. Both reviewers caught that independently.
+sbc_case contracted 0 'The `--sandbox` flag doesn'"'"'t contain the agent.'
+
 echo "== agy-media says what --yolo --dir exposes =="
-# GHSA-hwv2-vjgj-8rcv listed this as a contributing factor: --yolo approves ALL tools and
-# --dir hands over the media file's whole containing directory, which "transcribe this
-# recording" does not suggest. --print-command stops before any delegation runs.
+# GHSA-hwv2-vjgj-8rcv listed this as a contributing factor and scoped it to the containing
+# directory. Measured, the grant is wider than that — --dir is not a boundary — which is
+# what the assertion below pins. --print-command stops before any delegation runs.
 mdir="$TMP/mediawarn"; rm -rf "$mdir"; mkdir -p "$mdir"
 : > "$mdir/clip.wav"; : > "$mdir/tax-return.pdf"
 media_out="$(bash "$ROOT/scripts/agy-media.sh" --print-command "$mdir/clip.wav" 2>&1 >/dev/null)"
-if has 'approves ALL agy tools' "$media_out" && has "$mdir" "$media_out"; then
-  echo "ok: agy-media names the directory --dir exposes"; PASS=$((PASS+1));
-else echo "FAIL: agy-media does not say what --yolo --dir exposes"; FAIL=$((FAIL+1)); fi
+# It must say the grant is over the MACHINE. 0.25.0's version said "--dir exposes $DIR",
+# which understates it — --dir is where agy starts looking, not a boundary, and that was
+# measured: under --yolo agy writes outside it.
+if has 'WHOLE MACHINE' "$media_out" && has "$mdir" "$media_out"; then
+  echo "ok: agy-media says the grant covers the machine, not just --dir"; PASS=$((PASS+1));
+else echo "FAIL: agy-media understates --yolo as a --dir-scoped exposure"; FAIL=$((FAIL+1)); fi
 
 echo "== doctor.sh tier-model check (agy 1.1.5 slug format) =="
 # The stub's `agy models` emits slugs (gemini-3.5-flash); doctor's default tier models are
