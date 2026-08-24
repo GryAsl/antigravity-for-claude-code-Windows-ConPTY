@@ -3,6 +3,60 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.25.0 — security
+
+Fixes **GHSA-hwv2-vjgj-8rcv** (CVSS 8.6), reported privately by @Valkyness with
+non-destructive, exit-code-only proofs for every claim. `SECURITY.md` names
+`hooks/validate-delegate-bash.sh` as the only control on what the prompt-injectable
+`antigravity-delegate` subagent may run, so a bypass there is the highest-severity class
+this project has. Three of them were open at once.
+
+- **The gate authenticated a command by BASENAME.** `base()` reduced the first token to
+  its filename, so any executable called `agy-delegate`, `agy-job`, or an allowed producer
+  passed *from anywhere*: `./agy-delegate` out of a cloned repository, `/tmp/evil/agy-job`.
+  Untrusted repository content is the exact prompt-injection source `SECURITY.md` names,
+  so the control was defeated by the checkout it exists to survive. A wrapper must now be
+  a **bare name** — no `/`, no `\`. Nothing needed a path: `agents/`, `commands/` and
+  `skills/` have invoked these by bare name since 0.14.0, because the plugin puts `bin/`
+  on the Bash tool PATH and `$CLAUDE_PLUGIN_ROOT` is not exported to model-run Bash
+  (issue #11). A bare name resolves through PATH; a path resolves through the working
+  directory, which an attacker controls.
+- **The producer allowlist is gone entirely**, which closes the other two findings at
+  once. It was the second half of the #29 hardening, kept so
+  `git diff | agy-delegate -` would work, and that convenience was the hole:
+  - `git` with unrestricted arguments is a living-off-the-land binary.
+    `git -c alias.x='!cmd' x` runs `cmd`; so do `git --exec-path=<dir>` and
+    `git -c core.pager=<cmd>`. The last two are not in the advisory — they turned up while
+    reproducing it, which is the point: the defect is allowing a command by NAME while
+    ignoring its ARGUMENTS, not any one flag. `git push --force`, `git clean -fdx` and
+    `git reset --hard` were reachable through the same slot.
+  - `cat`, `echo` and `printf` feeding `agy-delegate -` were a file and secret
+    exfiltration primitive. The scanner blocks `$(` but allows `$VAR`, and the right-hand
+    side sends stdin to the external model as the prompt: `cat ~/.ssh/id_ed25519 |
+    agy-delegate -` and `printf %s "$AWS_SECRET_ACCESS_KEY" | agy-delegate -` were both
+    allowed, with no file allowlist and no confirmation.
+
+  Nothing needed the pipeline. This subagent's own contract already said the gate "blocks
+  every Bash command except the delegation wrapper" and showed only
+  `agy-delegate [options] "<task>"`; the documented
+  `git diff | agy-delegate --tier pro -` in `commands/review.md` runs as the **main**
+  Claude, and this hook is registered in the agent frontmatter, so it never gated that.
+  The gate is now what its own documentation always claimed. The denial says so and points
+  at `--dir <repo-root>` instead.
+- **`agy-media` now says what it is about to expose.** The advisory flagged it as a
+  contributing factor rather than a bypass: every real run passes `--yolo` (all tools,
+  including terminal) together with `--dir` on the media file's *containing* directory, so
+  choosing one recording hands over everything beside it — which "transcribe this file" does
+  not suggest. It prints the directory and how many entries are in it. `--sandbox` is the
+  candidate narrowing and is **not** applied: agy on the maintainer's account currently
+  fails every run with `Eligibility check failed`, so it could not be measured, and this
+  repository does not ship untested behavioural changes to working features.
+
+12 regression tests, every one of the advisory's proofs among them, each verified to fail
+against the unfixed gate. The two extra `git` vectors are included, and so is a liveness
+assertion — a PoC harness that cannot produce an *allowed* command would let every deny
+assertion pass on a broken payload, which has happened in this suite before.
+
 ## 0.24.0
 - **agy turned the write-without-grant denial into a hard error, and exit 15 quietly
   stopped happening.** Since 1.1.3 a denied tool in headless mode came back as rc 0 with

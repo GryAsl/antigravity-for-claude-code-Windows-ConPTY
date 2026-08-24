@@ -11,8 +11,17 @@
 # This version instead:
 #   * requires the FIRST command token (argv[0], basename, optional .sh) to be exactly
 #     agy-delegate / agy-job — a token check, not a substring match;
-#   * allows only one pipeline shape, `<git|cat|echo|printf> | agy-delegate|agy-job -`,
-#     so `git diff | agy-delegate -` keeps working;
+#   * allows NO pipeline at all. A producer allowlist was the second half of the #29
+#     hardening and it is what GHSA-hwv2-vjgj-8rcv broke, twice over: `git` with
+#     unrestricted arguments is a living-off-the-land binary (`git -c alias.x='!cmd' x`,
+#     `--exec-path=`, `-c core.pager=` all execute arbitrary commands, all measured), and
+#     `cat`/`echo`/`printf` feeding `agy-delegate -` reads any file or `$VAR` and ships it
+#     to the external model. Allowing a command by NAME while ignoring its arguments is
+#     not an identity check. Nothing needed the pipeline: this subagent's own contract
+#     says the gate "blocks every Bash command except the delegation wrapper" and shows
+#     only `agy-delegate [options] "<task>"`, and the documented
+#     `git diff | agy-delegate --tier pro -` in commands/review.md runs as the MAIN
+#     Claude, which this hook does not gate;
 #   * rejects UNQUOTED shell metacharacters bash would act on (`; & | < > ( ) #`,
 #     backticks, `$(`, and a NEWLINE — it separates commands just like `;`), while
 #     permitting them INSIDE a quoted prompt (no false positives on legitimate
@@ -33,7 +42,7 @@ set -uo pipefail
 
 input="$(cat)"
 
-BLOCK_MSG="[antigravity-delegate] blocked: this subagent may only run agy-delegate / agy-job (optionally as \`<git|cat|echo|printf> | agy-delegate -\`). No other commands, chaining, redirection, substitution, comments, or unquoted newlines. Delegate file work to agy; verification is the caller's job."
+BLOCK_MSG="[antigravity-delegate] blocked: this subagent may only run agy-delegate / agy-job, as a BARE name with no path and no pipeline. No other commands, pipes, chaining, redirection, substitution, comments, or unquoted newlines. To give agy a repository, pass --dir <repo-root> rather than piping content in. Delegate file work to agy; verification is the caller's job."
 
 # python3 gives a correct, quote-aware parse. Fail CLOSED if it's missing.
 if ! command -v python3 >/dev/null 2>&1; then
@@ -59,8 +68,7 @@ if not isinstance(cmd, str) or not cmd.strip():
 # `agy-delegate "hi\n` strips to `agy-delegate "hi`, which is still unbalanced.
 cmd = cmd.strip()
 
-WRAPPERS  = {"agy-delegate", "agy-job"}
-PRODUCERS = {"git", "cat", "echo", "printf"}
+WRAPPERS = {"agy-delegate", "agy-job"}
 
 # Say WHY, on stderr, so the caller can self-correct (issue #51). Claude Code feeds
 # PreToolUse stderr back to the agent, which is the same path BLOCK_MSG already takes.
@@ -78,9 +86,22 @@ CHAR_NAMES = {";": "';' (command separator)", "&": "'&' (background / chaining)"
               "(": "'(' (subshell)",          ")": "')' (subshell)",
               "#": "'#' (comment)"}
 
+# A bare NAME, never a path. This used to be os.path.basename(), which accepted any
+# directory: `./agy-delegate` in a cloned repository passed the gate and ran THAT file.
+# Untrusted repository content is the exact prompt-injection source SECURITY.md names,
+# so the one control it names was defeated by the checkout it was meant to survive.
+#
+# Nothing needs a path. agents/, commands/ and skills/ have invoked these by bare name
+# since 0.14.0 — the plugin puts bin/ on the Bash tool PATH because $CLAUDE_PLUGIN_ROOT
+# is not exported to model-run Bash (issue #11). A bare name resolves through PATH,
+# which the working directory is not on; a path resolves through the working directory,
+# which an attacker controls.
+#
+# Returns None for anything path-shaped, which every caller treats as "not allowed".
 def base(tok):
-    b = os.path.basename(tok)
-    return b[:-3] if b.endswith(".sh") else b
+    if "/" in tok or "\\" in tok:     # backslash too: Git Bash / MSYS accept `.\name`
+        return None
+    return tok[:-3] if tok.endswith(".sh") else tok
 
 # Quote-aware scan: split into pipeline segments on UNQUOTED '|', and flag any
 # unquoted metacharacter bash would act on (plus command substitution inside "").
@@ -148,26 +169,19 @@ def head(seg):
         return None
     return toks[0] if toks else None
 
-if len(segs) == 1:
-    t = head(segs[0])
-    if not t:
-        deny("the command could not be tokenised")
-    if base(t) not in WRAPPERS:
-        deny("the first command is not agy-delegate or agy-job")
-    sys.exit(0)
-elif len(segs) == 2:
-    lt, rt = head(segs[0]), head(segs[1])
-    if not lt or not rt:
-        deny("one side of the pipe could not be tokenised")
-    if base(lt) not in PRODUCERS:
-        deny("the left side of the pipe is not allowed — only git, cat, echo or "
-             "printf may feed the wrapper")
-    if base(rt) not in WRAPPERS:
-        deny("the right side of the pipe is not agy-delegate or agy-job")
-    sys.exit(0)
-else:
-    deny("%d pipes — at most one is allowed, as `<git|cat|echo|printf> | agy-delegate -`"
-         % (len(segs) - 1))
+if len(segs) != 1:
+    deny("a pipeline (%d pipe%s). No command may feed the wrapper: `git` with arbitrary "
+         "arguments runs arbitrary commands, and `cat`/`echo`/`printf` turn the wrapper "
+         "into a way to send any file or environment variable to the external model. "
+         "Pass `--dir <repo-root>` and let agy read the repository itself."
+         % (len(segs) - 1, "" if len(segs) == 2 else "s"))
+
+t = head(segs[0])
+if not t:
+    deny("the command could not be tokenised")
+if base(t) not in WRAPPERS:
+    deny("the first command is not agy-delegate or agy-job")
+sys.exit(0)
 PY
 then
   exit 0

@@ -162,6 +162,20 @@ Transcript file: $OUT"
 
 # --- delegate ----------------------------------------------------------------
 # --yolo: agy needs tool permission to read the media file and write the transcript.
+#
+# Say what that costs, every time. GHSA-hwv2-vjgj-8rcv named this as a contributing
+# factor: --yolo approves ALL tools, including terminal, and --dir hands over the media
+# file's whole CONTAINING directory — so picking one file exposes everything beside it.
+# That is not obvious from "transcribe this recording", and the person choosing the file
+# is the only one who can judge what else is in there.
+#
+# --sandbox is the candidate narrowing (it restricts the terminal tool, which is the bulk
+# of what --yolo grants, and the transcript is written by the file tool). It is NOT
+# applied here because it could not be verified: agy on this account currently fails every
+# run with "Eligibility check failed", so a behavioural change to a working feature would
+# ship untested. Warn now, narrow when it can be measured.
+NEIGHBOURS="$(ls -1 "$DIR" 2>/dev/null | grep -c . || echo 0)"
+echo "agy-media: --yolo approves ALL agy tools (including terminal) and --dir exposes $DIR — $NEIGHBOURS entr(y/ies) beside your file — for this run. Move the file to a directory of its own if anything there is sensitive." >&2
 ARGS=(--tier "$TIER" --yolo --dir "$DIR" --timeout "$TIMEOUT")
 if [ "$PRINT_CMD" -eq 1 ]; then
   { printf 'agy-delegate'; printf ' %q' "${ARGS[@]}" "$PROMPT"; printf '\n'; }
