@@ -110,6 +110,12 @@ case "${STUB_MODE:-text}" in
   badmodel) echo "Error: invalid --model \"X\": model X is not recognized as a known model" >&2; exit 1 ;; # -> exit 14
   softdeny) echo "no output produced — a tool required the \"write_file\" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow" >&2; exit 0 ;; # rc=0 + empty stdout -> exit 15
   big)     printf 'x%.0s' $(seq 1 20000); echo ;;    # dump-sized reply -> digest guard warns
+  # Dump-sized AND whitespace-bearing. `big` above is 20 KB of solid 'x', and $( ) strips
+  # its one trailing newline, so the captured value contains NO whitespace at all — which
+  # is exactly the case bash 3.2's substitution handles fast. That is why 305 tests on a
+  # 3.2.57 machine never saw issue #66. Measured: same 8 KB, 0% whitespace 0.04s, 2% or
+  # more 21-25s. A regression test for this has to carry whitespace.
+  bigws)   printf 'word %.0s' $(seq 1 3400) ;;
   # agy >= 1.1.8 structured envelope. Note the RAW newline inside "response" — agy really
   # emits that, and it makes the payload invalid for strict JSON parsers.
   json_ok)  printf '{"conversation_id":"c1","status":"SUCCESS","response":"JSONBODY\n","usage":{"input_tokens":10,"output_tokens":2,"thinking_tokens":1,"cache_read_tokens":3,"total_tokens":16}}'; exit 0 ;;
@@ -141,6 +147,10 @@ if [ "$1" = "logging" ] && [ "$2" = "read" ]; then
     empty) echo "[]" ;;
     fail)  echo "ERROR: (gcloud.logging.read) something broke" >&2; exit 1 ;;
     big)   pad=$(printf 'A%.0s' {1..3000}); printf '[{"m":"%s"}]TAIL_SENTINEL\n' "$pad" ;;  # large ASCII payload w/ tail marker
+    # Large AND whitespace-bearing. `big` above is solid 'A' inside JSON with no space
+    # anywhere, which is the case bash 3.2's substitution handles fast — the same blind
+    # spot the delegate's `big` had. Real log text has spaces in it.
+    bigws) pad=$(printf 'word %.0s' {1..3000}); printf '[{"m":"%s"}]\n' "$pad" ;;
     bigjp) pad=$(printf 'あ%.0s' {1..3000}); printf '[{"m":"%s"}]TAIL_SENTINEL\n' "$pad" ;;  # large multibyte (3-byte/char) payload
     *)     echo '[{"severity":"ERROR","textPayload":"KeyError: DATABASE_URL","timestamp":"2026-06-28T00:00:00Z"}]' ;;
   esac
@@ -844,6 +854,91 @@ check "bin/cloud-debug forwards to cloud-debug.sh (no CLAUDE_PLUGIN_ROOT)" 0 "$r
 out=$(env -u CLAUDE_PLUGIN_ROOT "$BIN/measure-session" 2>&1 | head -1)
 case "$out" in *measure-session*) echo "ok: bin/measure-session forwards to the .py"; PASS=$((PASS+1));;
   *) echo "FAIL: bin/measure-session did not forward (got: '$out')"; FAIL=$((FAIL+1));; esac
+
+echo "== the whitespace check does not pin a CPU (issue #66, bash 3.2) =="
+# `${OUT//[$' \t\n\r']/}` answers "is this only whitespace?" by rewriting the whole
+# string. On the bash macOS ships — 3.2.57, frozen in 2007, and what /usr/bin/env bash
+# resolves to on a stock Mac — that is catastrophically slow as soon as the string
+# contains ONE whitespace character: measured on this machine, 8 KB took 24s and every
+# doubling cost ~6x. Reported wrappers held a core at 99% for over two hours after agy had
+# already finished successfully.
+#
+# It is also not interruptible: bash cannot service SIGTERM inside the substitution, so
+# `timeout 90` on the run above returned only after 205s. No wall-clock guard can bound
+# it, which is why `agy-job status` kept reporting `running`.
+#
+# The bound is generous on purpose — the fixed path is ~0.9s here and the broken one is
+# minutes, so anything in between separates them. -k forces a KILL so a regression fails
+# in 35s instead of hanging CI for the full 205.
+# The bound must NOT depend on GNU `timeout`. Stock macOS does not ship it, and stock
+# macOS is exactly where bash 3.2 lives — so keying on it would make this test skip, or
+# worse report ok on rc=127, on the one platform it exists to protect. Both reviewers
+# caught that. Background the run and kill it from here instead; works everywhere.
+ws_bounded() { # $1 = seconds, rest = command. Echoes the exit status.
+  local secs="$1"; shift
+  "$@" >/dev/null 2>&1 &
+  local pid=$! rc
+  ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  local killer=$!
+  wait "$pid"; rc=$?
+  kill "$killer" 2>/dev/null; wait "$killer" 2>/dev/null
+  echo "$rc"
+}
+ws_t0="$(python3 -c 'import time; print(time.time())')"
+ws_rc="$(STUB_MODE=bigws ws_bounded 30 "$DELEGATE" "hi")"
+ws_t1="$(python3 -c 'import time; print(time.time())')"
+ws_secs="$(python3 -c "print('%.1f' % ($ws_t1 - $ws_t0))")"
+if [ "$ws_rc" = 0 ]; then
+  echo "ok: a 17KB whitespace-bearing reply completes (${ws_secs}s)"; PASS=$((PASS+1));
+else echo "FAIL: the whitespace check pinned the CPU on a 17KB reply (rc=$ws_rc after ${ws_secs}s)"; FAIL=$((FAIL+1)); fi
+# cloud-debug has the same shape on $LOGS — raw `gcloud logging read` output, checked
+# BEFORE the 200 KB cap is applied, so it was the worse of the two. Review found it while
+# reading the fix for the delegate; no test could have, because the `big` gcloud mode is
+# solid 'A' inside JSON with no whitespace at all.
+cd_t0="$(python3 -c 'import time; print(time.time())')"
+# NOT --print-command: that exits at cloud-debug.sh:168, before LOGS is even fetched at
+# 179, so the check under test is never reached and the assertion passes on nothing. The
+# first version of this test did exactly that and stayed green with the fix removed.
+cd_rc="$(GCLOUD_MODE=bigws ws_bounded 30 "$ROOT/scripts/cloud-debug.sh" --service svc)"
+cd_secs="$(python3 -c "print('%.1f' % ($(python3 -c 'import time; print(time.time())') - $cd_t0))")"
+if [ "$cd_rc" = 0 ]; then
+  echo "ok: a large whitespace-bearing log payload completes (${cd_secs}s)"; PASS=$((PASS+1));
+else echo "FAIL: cloud-debug pinned the CPU on a large log payload (rc=$cd_rc after ${cd_secs}s)"; FAIL=$((FAIL+1)); fi
+
+# ...and the shipped scripts must not reintroduce the shape anywhere else.
+#
+# Match the SHAPE, not one spelling. The first version looked for the ANSI-C form only and
+# reported all-clear while `${LOGS//[[:space:]]/}` sat in cloud-debug.sh doing the same
+# thing to raw `gcloud logging read` output — measured at the same cost, and ahead of the
+# 200 KB cap, so it was the worse of the two. Review found it; the guard could not.
+#
+# A line may opt out with `# ws-strip-ok:` and a reason. cloud-debug keeps one, reached
+# only when the string is already known to be whitespace and brackets.
+# Comments are stripped first, and the marker is read BEFORE that — the lines explaining
+# why this shape is gone all quote it, and an unstripped grep reports the explanation as
+# the offence. That is the same trap the `sort -V` guard fell into.
+# find, not a flat glob. The first version used `grep -r`; rewriting it per-file to strip
+# comments quietly narrowed it to the top level, so a script added under scripts/<sub>/
+# would have escaped. Nothing is nested today — the point is that nothing has to stay
+# that way for the guard to hold. Reviewers caught the narrowing.
+ws_bad=""; ws_seen=0
+while IFS= read -r wsf; do
+  [ -n "$wsf" ] || continue
+  ws_seen=$((ws_seen+1))
+  hit="$(grep -vn 'ws-strip-ok:' "$wsf" | sed 's/#.*//' \
+         | grep -n '\${[A-Za-z_][A-Za-z0-9_]*//\[' | cut -d: -f1 | tr '\n' ',')"
+  [ -n "$hit" ] && ws_bad="$ws_bad ${wsf#"$ROOT"/}"
+done <<EOF
+$(find "$ROOT/scripts" "$ROOT/hooks" -name "*.sh" -type f 2>/dev/null)
+EOF
+# find's stderr is discarded, so a bad path or an unreadable directory would give the
+# loop nothing and the guard would report all-clear having scanned zero files.
+# Count what it saw. Reviewers caught the vacuous pass.
+if [ "$ws_seen" -lt 8 ]; then
+  echo "FAIL: the whitespace guard scanned only $ws_seen files — it found nothing to check"; FAIL=$((FAIL+1));
+elif [ -z "$ws_bad" ]; then
+  echo "ok: no shipped script deletes whitespace to test for it ($ws_seen files)"; PASS=$((PASS+1));
+else echo "FAIL: whitespace-deleting substitution is back in:$ws_bad"; FAIL=$((FAIL+1)); fi
 
 echo "== --sandbox is not sold as containment =="
 # 0.25.0 deferred adding --sandbox to agy-media because agy could not run. It runs now,
