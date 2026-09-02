@@ -17,7 +17,7 @@ model runs, so marketplace installs saw an empty path ([#11](https://github.com/
 `agy-job`, `agy-doctor`, `agy-cost-compare`) on the plugin's `bin/` PATH:
 
 ```
-/plugin marketplace update antigravity-for-claude-code
+/plugin marketplace update antigravity-for-claude-code-windows-conpty
 /reload-plugins
 ```
 
@@ -201,7 +201,7 @@ plugin option; `0` disables the warning.
 Third-party marketplace plugins do **not** auto-update by default:
 
 ```
-/plugin marketplace update antigravity-for-claude-code
+/plugin marketplace update antigravity-for-claude-code-windows-conpty
 /reload-plugins
 ```
 

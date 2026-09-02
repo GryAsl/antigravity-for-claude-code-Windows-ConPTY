@@ -1,6 +1,6 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "antigravity-for-claude-code",
+  "name": "antigravity-for-claude-code-windows-conpty",
   "description": "Claude Code + Antigravity orchestration with native Windows ConPTY support.",
   "owner": {
     "name": "GryAsl"

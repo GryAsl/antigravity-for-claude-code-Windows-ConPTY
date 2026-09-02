@@ -38,5 +38,5 @@ do), and a **non-destructive** proof-of-concept (exit codes / policy decisions, 
 ## Supported versions
 
 Fixes land on the latest release. Update with
-`/plugin marketplace update antigravity-for-claude-code` and `/reload-plugins`; the
+`/plugin marketplace update antigravity-for-claude-code-windows-conpty` and `/reload-plugins`; the
 `version` in `.claude-plugin/plugin.json` is what marketplace update recognizes.

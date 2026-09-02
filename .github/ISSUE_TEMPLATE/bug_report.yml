@@ -41,7 +41,7 @@ body:
       label: How is the plugin installed?
       description: Marketplace and local-dev installs resolve paths differently (see #11) — this matters.
       options:
-        - Marketplace (/plugin install antigravity@antigravity-for-claude-code)
+        - Marketplace (/plugin install antigravity@antigravity-for-claude-code-windows-conpty)
         - Local dev (claude --plugin-dir ...)
         - Not sure
     validations:

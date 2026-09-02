@@ -42,7 +42,7 @@ Then install this repository as a Claude Code plugin. Run these commands inside 
 
 ```text
 /plugin marketplace add GryAsl/antigravity-for-claude-code-Windows-ConPTY
-/plugin install antigravity@antigravity-for-claude-code
+/plugin install antigravity@antigravity-for-claude-code-windows-conpty
 /antigravity:setup
 ```
 
