@@ -18,11 +18,13 @@ This fork adds reliable native Windows support through Windows ConPTY and [`agy-
 
 ## Requirements
 
-- Windows 10 or Windows 11 with ConPTY support
+- Native Windows supported through [`agy-headless-bridge`](https://github.com/rhishi99/agy-headless-bridge); follow its Windows prerequisites
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 - [Antigravity CLI](https://antigravity.google/docs/cli-using) (`agy`), installed and authenticated
 - Python 3.9 or newer
-- [Git for Windows](https://git-scm.com/download/win)
+- Git Bash, normally provided by [Git for Windows](https://git-scm.com/download/win), because this plugin's wrappers and hooks are Bash scripts
+
+Claude Code itself can run without Git for Windows by using PowerShell. This plugin currently needs Git Bash; Git is not otherwise required by its runtime.
 
 Run `agy` once and complete its authentication before installing the plugin. Confirm that Gemini models are available with:
 
