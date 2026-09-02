@@ -61,6 +61,21 @@ Claude Code can select the included `antigravity-delegate` sub-agent automatical
 /antigravity:research "Research this topic and include sources"
 ```
 
+For lean repository exploration and diff review, Claude can call the included wrappers
+directly:
+
+```text
+agy-scout --dir "C:\path\to\repo" "Trace the request flow and identify likely hotspots"
+agy-review --dir "C:\path\to\repo" --staged --goal "Implement feature X without behavior regressions"
+```
+
+`agy-scout` builds the repeated read-only Flash contract automatically. `agy-review`
+sends the Git patch directly to a fresh Gemini Flash verifier and returns only a compact
+verdict plus a proposed Conventional Commit subject; the raw diff does not enter Claude's
+context. Windows-safe chunks are reconciled internally without exposing partial output.
+Untracked contents are excluded until staged, and patches over 48 KiB must be narrowed
+with `--path` or reviewed as staged logical groups.
+
 For tasks that modify files, work on a separate Git branch and review the resulting diff. Use `--yolo` only when necessary: it grants Antigravity broad tool permissions.
 
 On native Windows, long structured/agentic calls may produce no intermediate output.

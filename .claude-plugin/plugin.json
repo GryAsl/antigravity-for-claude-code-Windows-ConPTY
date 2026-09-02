@@ -1,6 +1,6 @@
 {
   "name": "antigravity",
-  "version": "0.25.5",
+  "version": "0.26.0",
   "description": "Run the Antigravity CLI (Gemini) as a Claude Code sub-agent, including native Windows 11 headless support through agy-headless-bridge and ConPTY.",
   "author": {
     "name": "GryAsl"

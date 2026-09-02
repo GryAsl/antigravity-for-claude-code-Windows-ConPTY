@@ -643,9 +643,12 @@ check "policy-context.json is valid JSON" 0 "$rc"
 
 out=$("$HOOKS/inject-policy.sh" 2>/dev/null); rc=$?
 check "inject-policy default on -> emits additionalContext" 0 "$rc" "additionalContext" "$out"
-check "inject-policy is cost-aware (not 'delegate everything')" 0 "$rc" "COST-AWARE" "$out"
-check "inject-policy allows small tasks" 0 "$rc" "Small, self-contained tasks ARE eligible" "$out"
-check "inject-policy pins normal work to Flash" 0 "$rc" '`--tier flash` (Gemini 3.7 Flash High)' "$out"
+check "inject-policy uses lean routing (not 'delegate everything')" 0 "$rc" "LEAN ROUTING" "$out"
+check "inject-policy allows small tasks" 0 "$rc" "including small tasks" "$out"
+check "inject-policy pins normal work to Flash" 0 "$rc" 'Gemini 3.7 Flash (`--tier flash`)' "$out"
+check "inject-policy routes repository exploration through agy-scout" 0 "$rc" "agy-scout --dir" "$out"
+check "inject-policy routes raw diffs through agy-review" 0 "$rc" "agy-review --dir" "$out"
+check "inject-policy forbids duplicate raw-diff ingestion" 0 "$rc" "NEVER load or print the raw diff" "$out"
 # the emitted stdout is a well-formed SessionStart hook payload (not just substrings)
 printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["hookSpecificOutput"]["hookEventName"]=="SessionStart"' 2>/dev/null; rc=$?
 check "inject-policy emits valid SessionStart JSON" 0 "$rc"
@@ -888,7 +891,7 @@ else echo "FAIL: delegate agent small-task/Flash policy missing or contradictory
 
 echo "== bin/ entrypoints (issue #11: \$CLAUDE_PLUGIN_ROOT not on model-run Bash) =="
 BIN="$ROOT/bin"
-for b in agy-delegate agy-job agy-cost-compare agy-doctor cloud-debug agy-trace measure-session agy-media; do
+for b in agy-delegate agy-job agy-cost-compare agy-doctor cloud-debug agy-trace measure-session agy-media agy-review agy-scout; do
   if [ -x "$BIN/$b" ]; then echo "ok: bin/$b executable"; PASS=$((PASS+1));
   else echo "FAIL: bin/$b missing or not executable"; FAIL=$((FAIL+1)); fi
 done
@@ -1787,7 +1790,7 @@ for s in ("hooks/check-agy.sh", "hooks/inject-policy.sh", "hooks/validate-delega
 
 # bin/ entrypoints exist + executable (issue #11: $CLAUDE_PLUGIN_ROOT isn't exported
 # to model-run Bash, so commands/skill must call these bare names on the PATH)
-for b in ("agy-delegate", "agy-job", "agy-cost-compare", "agy-doctor", "cloud-debug", "agy-trace", "measure-session", "agy-media"):
+for b in ("agy-delegate", "agy-job", "agy-cost-compare", "agy-doctor", "cloud-debug", "agy-trace", "measure-session", "agy-media", "agy-review", "agy-scout"):
     need(os.access(p("bin", b), os.X_OK), "bin entrypoint missing/not executable: bin/" + b)
 
 # regression guard: commands & skill must NOT invoke $CLAUDE_PLUGIN_ROOT/scripts/* — that
@@ -1826,6 +1829,12 @@ check "plugin contract (manifests, hook/agent refs, frontmatter, exec bits)" 0 "
 
 # The migration tool has its own suite: it needs a synthetic HOME rather than the
 # `agy` stub this file installs, so it runs as a child and reports one line here.
+if bash "$HERE/test-lean-wrappers.sh" > "$TMP/lean-wrappers.log" 2>&1; then
+  echo "ok: lean wrapper suite ($(grep -c '^ok:' "$TMP/lean-wrappers.log") checks)"; PASS=$((PASS+1))
+else
+  echo "FAIL: lean wrapper suite"; sed 's/^/    /' "$TMP/lean-wrappers.log" | tail -20; FAIL=$((FAIL+1))
+fi
+
 if bash "$HERE/test-migrate.sh" > "$TMP/migrate.log" 2>&1; then
   echo "ok: agy-migrate suite ($(grep -c '^ok:' "$TMP/migrate.log") checks)"; PASS=$((PASS+1))
 else

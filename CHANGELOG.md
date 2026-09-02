@@ -3,6 +3,21 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.26.0 — Lean scout and blind diff review
+
+- Added `agy-scout`, a short read-only Gemini 3.7 Flash entrypoint that supplies the
+  repeated repository-investigation, evidence, digest, and next-gap contract itself.
+- Added `agy-review`, which captures a bounded Git patch internally and sends it directly
+  to a fresh Flash verifier. Claude receives only the structured verdict, findings, test
+  gaps, and proposed Conventional Commit subject—not the raw diff.
+- Review scope is explicit (`--worktree`, `--staged`, `--last`, `--range`, repeatable
+  `--path`); external diff/textconv are disabled, untracked contents are flagged and
+  excluded, Windows-safe chunks are privately reconciled, and oversized patches/model
+  responses fail closed instead of flooding context.
+- The injected and global routing policies now use the lean wrappers, minimize textual
+  churn, anticipate the next downstream gap, cap builder/verifier/repair rounds, and keep
+  raw diffs and long logs out of Claude's context.
+
 ## 0.25.5 — Windows silent-work timeout fix
 
 - Native Windows delegations no longer inherit a fixed 120-second idle limit. When no

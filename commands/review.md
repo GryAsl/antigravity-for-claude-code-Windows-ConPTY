@@ -1,26 +1,24 @@
 ---
-description: Get an independent cross-model review of the current diff from Antigravity (Gemini), then reconcile as the final judge.
-argument-hint: "[--adversarial] [scope: paths or git range]"
+description: Review a Git diff with a fresh Gemini Flash verifier without loading the raw patch into Claude's context.
+argument-hint: "[--staged|--last|--range A..B] [--path PATH] [goal]"
 ---
 
-Use Antigravity (`agy` / Gemini) as an **independent, different-model reviewer** of the
-current changes, then reconcile the findings yourself (you are the final judge).
+Use the plugin's lean review wrapper. It captures the selected Git patch internally,
+sends it directly to a fresh Gemini reviewer, and returns only a compact verdict. The
+raw diff must not enter your context.
 
 Scope/flags: $ARGUMENTS
 
 Do this:
-1. Capture the diff: `git diff` (or the range/paths in the scope above; default to
-   uncommitted + last commit if unspecified).
-2. Delegate the review to agy (pro tier) — pipe the diff in on stdin:
-   `git diff | agy-delegate --tier pro -`
-   (This runs as YOU, the conductor. The `antigravity-delegate` subagent cannot pipe —
-   its PreToolUse gate refuses every pipeline since GHSA-hwv2-vjgj-8rcv, because `git`
-   with arbitrary arguments executes arbitrary commands and `cat` feeding the wrapper
-   ships any file to the external model. If you delegate this step, pass `--dir`.)
-   with an instruction to find correctness/security/performance bugs, be skeptical, and
-   list each as `file:line — issue`. If `--adversarial` is set, also have it challenge the
-   design decisions and tradeoffs, not just line bugs.
-3. **Reconcile**: for each finding, corroborate it against the actual code. Drop false
-   positives; keep what's real. Agreement across two model families is a stronger signal;
-   disagreement is a prompt to look closer.
-4. Report the reconciled findings (most severe first) and your verdict.
+1. Run `agy-review --dir <repo-root> $ARGUMENTS`. Default scope is all staged and
+   unstaged tracked changes relative to `HEAD`; use `--staged` for the final pre-commit
+   review. Include a short `--goal` describing the original contract when it is not
+   already present in `$ARGUMENTS`.
+2. Read only its verdict, findings, test gaps, and proposed Conventional Commit subject.
+   Never run `git diff` merely to duplicate this review. Untracked contents are excluded,
+   so stage task-owned new files before the final review.
+3. Run the smallest sufficient deterministic test/build/lint gate yourself. Inspect code
+   only for a reported discrepancy, failed gate, high-risk security/architecture change,
+   or an inconclusive verdict.
+4. Reconcile real findings and report the final verdict. Gemini remains a first-pass
+   reviewer; its approval does not replace deterministic evidence or your accountability.

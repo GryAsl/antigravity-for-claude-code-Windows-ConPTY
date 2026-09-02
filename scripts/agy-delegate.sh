@@ -329,7 +329,9 @@ fi
 # (--mode accept-edits is NOT a grant: measured on agy 1.1.13, where the flag is
 #  actually applied since 1.1.12, the write is denied exactly like one without it.)
 # Best-effort heuristic; warn only. --print-command (dry run) is exempt.
-if [ "$YOLO" -eq 0 ] && [ "$PRINT_CMD" -ne 1 ]; then
+# Lean read-only wrappers set AGY_DELEGATE_READ_ONLY=1 because their payload may quote
+# words such as "implement" from a diff even though agy receives no repository/tools.
+if [ "$YOLO" -eq 0 ] && [ "$PRINT_CMD" -ne 1 ] && [ "${AGY_DELEGATE_READ_ONLY:-0}" != 1 ]; then
   shopt -s nocasematch
   case "$PROMPT" in
     *implement*|*scaffold*|*migrate*|*refactor*|*"write the file"*|*"create the file"*|*"edit the file"*)
