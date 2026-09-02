@@ -433,6 +433,18 @@ check "userConfig timeout=9m -> --print-timeout 9m" 0 "$rc" "--print-timeout 9m"
 out=$(STUB_MODE=args CLAUDE_PLUGIN_OPTION_TIMEOUT=9m "$DELEGATE" --timeout 3m "hi" 2>/dev/null); rc=$?
 check "explicit --timeout overrides userConfig" 0 "$rc" "--print-timeout 3m" "$out"
 
+# Native Windows structured output can be silent for the whole agentic turn. Pin the
+# regression that killed healthy broad scouts at a fixed 120s despite a 5m/10m hard wall.
+if grep -qF 'BRIDGE_IDLE_TIMEOUT="${AGY_BRIDGE_IDLE_TIMEOUT:-120}"' "$DELEGATE"; then
+  echo "FAIL: Windows bridge still defaults idle timeout to fixed 120s"; FAIL=$((FAIL+1));
+else echo "ok: Windows bridge no longer defaults idle timeout to fixed 120s"; PASS=$((PASS+1)); fi
+if grep -qF 'BRIDGE_IDLE_TIMEOUT="$(( BRIDGE_HARD_TIMEOUT + 1 ))"' "$DELEGATE"; then
+  echo "ok: default Windows idle ceiling follows the hard timeout"; PASS=$((PASS+1));
+else echo "FAIL: Windows idle ceiling is not derived from the hard timeout"; FAIL=$((FAIL+1)); fi
+if grep -q -- '--idle-timeout)' "$DELEGATE" && grep -qF 'CLAUDE_PLUGIN_OPTION_IDLE_TIMEOUT' "$DELEGATE"; then
+  echo "ok: CLI and plugin idle-timeout overrides are wired"; PASS=$((PASS+1));
+else echo "FAIL: idle-timeout override surface is incomplete"; FAIL=$((FAIL+1)); fi
+
 # invalid default tier from config falls back to flash; explicit --tier typo still errors
 out=$(STUB_MODE=args CLAUDE_PLUGIN_OPTION_DEFAULT_TIER=bogus "$DELEGATE" "hi" 2>/dev/null); rc=$?
 check "invalid userConfig tier -> falls back to flash" 0 "$rc" "Gemini 3.7 Flash (High)" "$out"

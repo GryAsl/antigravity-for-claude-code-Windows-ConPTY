@@ -52,11 +52,30 @@ Then run `agy-doctor` or `/antigravity:setup`.
 | `agy` not found (exit 13) | put `agy.exe` on PATH or set `AGY_PATH` to its full path |
 | auth required (exit 11) | run `agy` once in a real terminal and finish sign-in |
 | model unavailable (exit 14) | check models interactively and remap `tier_flash`, `tier_flash_lo`, or `tier_pro` |
-| idle/hard timeout (exit 12) | check network/MCP startup; narrow the task or raise `AGY_BRIDGE_IDLE_TIMEOUT` / `AGY_BRIDGE_TIMEOUT` |
+| idle/hard timeout (exit 12) | one idle result is not proof of lost connectivity; run a short `/model` or one-file probe, then narrow/split the task or raise `--timeout` / `--idle-timeout` |
 
 `AGY_BRIDGE_PYTHON` must be an executable path, not a shell command string. The default
 is `py -3`, then a working `python` fallback. `agy-doctor` reports the exact interpreter
 and bridge version it resolved.
+
+Structured print mode can stay completely silent while Gemini is still searching and
+reasoning. Older builds used a fixed 120-second ConPTY idle timeout, so a broad repository
+scout could be killed even when its 5- or 10-minute hard timeout had not expired. Current
+builds derive the idle timeout just above the hard ceiling by default. You may override it
+with `agy-delegate --idle-timeout <seconds>`, plugin option `idle_timeout`, or environment
+variable `AGY_BRIDGE_IDLE_TIMEOUT` (highest non-CLI precedence). A deliberately smaller
+idle value is useful for detecting a true stall, but can recreate the false positive.
+
+Diagnose an `idle (no output)` result before falling back to Claude:
+
+```bash
+agy-delegate --tier flash --dir . --timeout 45s --digest \
+  "READ-ONLY health probe: report one existing source filename; change nothing."
+```
+
+If that succeeds, auth/model/bridge/workspace reads are healthy. Split the original
+omnibus prompt into independent scouts or retry it once with a suitable hard timeout.
+Only treat the bridge as unavailable when the small probe or bounded retry also fails.
 
 ---
 

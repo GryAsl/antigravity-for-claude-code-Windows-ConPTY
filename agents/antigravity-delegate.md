@@ -68,7 +68,8 @@ Options: `--tier flash|flash-lo|pro` · `--dir <repo-root>` (so agy reads
 (required for any tool use or file writing in headless mode — a grant over the machine,
 not over `--dir`) · `--sandbox` (does NOT contain anything; measured inert under
 `--yolo`) ·
-`--timeout 10m` · `-c`/`--continue` to hold state on the cheap side.
+`--timeout 10m` · `--idle-timeout 600` (optional native-Windows override) ·
+`-c`/`--continue` to hold state on the cheap side.
 
 ## Cost discipline (why this subagent exists)
 
@@ -128,6 +129,8 @@ The wrapper exits non-zero and prints an `AGY_SIGNAL {...}` line on failure:
 
 - `10` quota / rate limit → report it; suggest the caller retry later with `--continue`.
 - `11` auth required → tell the caller to run `agy` once interactively to sign in.
-- `12` timeout → suggest a larger `--timeout` or a narrower task.
+- `12` timeout → on Windows, do not label one `idle (no output)` result a connectivity
+  failure. Run a short `/model` or one-file read health probe. If it succeeds, split an
+  omnibus prompt or retry once with a larger `--timeout`/`--idle-timeout`; only then fall back.
 - `13` agy missing → report the install step (https://antigravity.google/docs/cli-using).
 - `2` generic agy failure · `3` empty output → report the stderr and suggest `--tier pro` or a sharper spec.

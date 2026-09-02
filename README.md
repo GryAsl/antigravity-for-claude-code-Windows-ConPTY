@@ -63,6 +63,11 @@ Claude Code can select the included `antigravity-delegate` sub-agent automatical
 
 For tasks that modify files, work on a separate Git branch and review the resulting diff. Use `--yolo` only when necessary: it grants Antigravity broad tool permissions.
 
+On native Windows, long structured/agentic calls may produce no intermediate output.
+The wrapper therefore derives its ConPTY idle limit from the task's hard timeout instead
+of killing every silent call after 120 seconds. Override it only when needed with
+`--idle-timeout <seconds>` or the plugin's `idle_timeout` setting.
+
 If something fails, run `/antigravity:setup` again and see [Windows troubleshooting](docs/TROUBLESHOOTING.md).
 
 ## License

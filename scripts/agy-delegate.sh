@@ -23,6 +23,8 @@
 #   -t, --tier <flash|flash-lo|pro>  Model tier (default: flash)
 #   -d, --dir  <path>                Add a workspace dir (repeatable)
 #       --timeout <dur>              Print-mode timeout, e.g. 10m (default: 5m)
+#       --idle-timeout <secs>        Native Windows no-output timeout. Default: just
+#                                    above the hard timeout, so JSON work may finish
 #       --yolo                       Auto-approve all tool permissions (DANGEROUS)
 #       --sandbox                    Run agent with terminal sandbox restrictions
 #       --digest                     Append a digest-only output contract to the prompt
@@ -55,15 +57,18 @@
 #
 # agy is multi-model: tiers map to Gemini by default, but you can point delegation at any
 # model `agy models` lists (e.g. Claude/GPT on plans that expose them). Defaults via plugin
-# userConfig (env): CLAUDE_PLUGIN_OPTION_DEFAULT_TIER, _TIMEOUT, _DEFAULT_MODEL (exact name),
-# _USAGE_LOG, and per-tier remaps _TIER_FLASH / _TIER_FLASH_LO / _TIER_PRO.
-# Explicit --model/--tier win; AGY_USAGE_LOG wins over _USAGE_LOG.
+# userConfig (env): CLAUDE_PLUGIN_OPTION_DEFAULT_TIER, _TIMEOUT, _IDLE_TIMEOUT,
+# _DEFAULT_MODEL (exact name), _USAGE_LOG, and per-tier remaps _TIER_FLASH /
+# _TIER_FLASH_LO / _TIER_PRO. Explicit flags win; AGY_BRIDGE_IDLE_TIMEOUT wins
+# over _IDLE_TIMEOUT; AGY_USAGE_LOG wins over _USAGE_LOG.
 #
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 TIER="${CLAUDE_PLUGIN_OPTION_DEFAULT_TIER:-flash}"
 TIMEOUT="${CLAUDE_PLUGIN_OPTION_TIMEOUT:-5m}"
+IDLE_TIMEOUT="${CLAUDE_PLUGIN_OPTION_IDLE_TIMEOUT:-}"
+IDLE_TIMEOUT_EXPLICIT=0
 TIER_EXPLICIT=0
 MODEL=""
 YOLO=0
@@ -245,6 +250,7 @@ while [ $# -gt 0 ]; do
     -t|--tier)      need "$#" "$1"; TIER="$2"; TIER_EXPLICIT=1; shift 2 ;;
     -d|--dir)       need "$#" "$1"; ADD_DIRS+=("$2"); shift 2 ;;
     --timeout)      need "$#" "$1"; TIMEOUT="$2"; shift 2 ;;
+    --idle-timeout) need "$#" "$1"; IDLE_TIMEOUT="$2"; IDLE_TIMEOUT_EXPLICIT=1; shift 2 ;;
     --yolo)         YOLO=1; shift ;;
     --sandbox)      SANDBOX=1; shift ;;
     --digest)       DIGEST=1; shift ;;               # ask agy for a digest-only reply
@@ -463,11 +469,27 @@ if on_windows_native; then
   else
     BASE_SECS="$(duration_secs "$TIMEOUT")"
     BRIDGE_HARD_TIMEOUT="${AGY_BRIDGE_TIMEOUT:-$(( BASE_SECS + 15 ))}"
-    BRIDGE_IDLE_TIMEOUT="${AGY_BRIDGE_IDLE_TIMEOUT:-120}"
-    case "$BRIDGE_HARD_TIMEOUT:$BRIDGE_IDLE_TIMEOUT" in
-      *[!0-9:]*|:*|*:) echo "agy-delegate: AGY_BRIDGE_TIMEOUT and AGY_BRIDGE_IDLE_TIMEOUT must be positive integer seconds" >"$ERR"; RC=16 ;;
-      0:*|*:0) echo "agy-delegate: AGY_BRIDGE_TIMEOUT and AGY_BRIDGE_IDLE_TIMEOUT must be greater than zero" >"$ERR"; RC=16 ;;
+    case "$BRIDGE_HARD_TIMEOUT" in
+      *[!0-9]*|'') echo "agy-delegate: AGY_BRIDGE_TIMEOUT must be positive integer seconds" >"$ERR"; RC=16 ;;
+      0) echo "agy-delegate: AGY_BRIDGE_TIMEOUT must be greater than zero" >"$ERR"; RC=16 ;;
       *)
+        # Structured print mode may remain completely silent while an agentic turn
+        # is doing useful work. A fixed 120s idle limit killed broad repo scouts
+        # before their 5m/10m print timeout. Unless configured, keep idle just past
+        # the hard wall so agy's inner print timeout gets the first chance to fire.
+        if [ "$IDLE_TIMEOUT_EXPLICIT" -eq 1 ]; then
+          BRIDGE_IDLE_TIMEOUT="$IDLE_TIMEOUT"
+        elif [ -n "${AGY_BRIDGE_IDLE_TIMEOUT:-}" ]; then
+          BRIDGE_IDLE_TIMEOUT="$AGY_BRIDGE_IDLE_TIMEOUT"
+        elif [ -n "$IDLE_TIMEOUT" ]; then
+          BRIDGE_IDLE_TIMEOUT="$IDLE_TIMEOUT"
+        else
+          BRIDGE_IDLE_TIMEOUT="$(( BRIDGE_HARD_TIMEOUT + 1 ))"
+        fi
+        case "$BRIDGE_IDLE_TIMEOUT" in
+          *[!0-9]*|'') echo "agy-delegate: idle timeout must be positive integer seconds" >"$ERR"; RC=16 ;;
+          0) echo "agy-delegate: idle timeout must be greater than zero" >"$ERR"; RC=16 ;;
+          *)
         REQF="$(mktemp "${TMPDIR:-/tmp}/agy-request.XXXXXX")"
         PROMPTF="$(mktemp "${TMPDIR:-/tmp}/agy-prompt.XXXXXX")"
         printf '%s' "$PROMPT" >"$PROMPTF"
@@ -509,6 +531,8 @@ PY
           "${BRIDGE_PY[@]}" "$ADAPTER_WIN" "$REQ_WIN" < /dev/null >"$OUTF" 2>"$ERR"
           RC=$?
         fi ;;
+        esac
+        ;;
     esac
   fi
 elif [ -n "$TO_CMD" ]; then

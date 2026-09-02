@@ -1,7 +1,7 @@
 ---
 name: antigravity
 description: Run the Antigravity CLI (Gemini) as a collaborating AI inside Claude Code, with intelligent model routing across the software development lifecycle. Claude is the conductor/orchestrator — requirements, architecture, the hard 20%, verification, and review — and routes deterministic, high-volume work (scaffolding, boilerplate, test generation, first-pass review, migrations, web/Vertex AI Search) to Antigravity (Gemini), the cheaper, faster model. Use when the user wants to "use Antigravity / agy", "vibe code / agentic engineering", "accelerate the SDLC", "delegate to Gemini", "scaffold / generate tests / migrate", "first-pass code review", "search web or internal/company data", "deep research / multi-source research report", "second-model cross-check", or "lower token cost on a big job". Claude always verifies Antigravity's output and re-checks itself if unsatisfied.
-version: 0.25.4
+version: 0.25.5
 ---
 
 # Antigravity for Claude Code — hybrid SDLC
@@ -98,7 +98,8 @@ the cross-model verification value (Claude executing Claude loses both).
 agy-delegate [options] "the task prompt"
 ```
 Options: `--tier flash|flash-lo|pro` · `--dir <path>` (workspace, repeatable) ·
-`--timeout 10m` · `--yolo` (auto-approve **ALL** tools — the blunt grant; needed for web /
+`--timeout 10m` · `--idle-timeout 600` (optional native-Windows no-output ceiling;
+normally derived just above the hard timeout) · `--yolo` (auto-approve **ALL** tools — the blunt grant; needed for web /
 Vertex AI Search / terminal, and for writes not covered by a `permissions.allow` rule. For a
 file write the narrower grant is usually a `write_file(<dir>)` entry in
 `~/.gemini/antigravity-cli/settings.json`, which needs no flag — see below. Run write tasks
@@ -136,10 +137,10 @@ force it with the `structured_output` option.
 > Gemini-side data exactly this way, which made the hybrid look cheaper than it was. A
 > named file cannot be truncated by a pipe.
 
-**Two ways to delegate.** Call the wrapper directly (above), or — when you want file
-generation to happen entirely on Gemini with **zero Claude tokens spent writing** — hand
-the unit to the **`antigravity-delegate` subagent** (its only file-acting tool is the
-wrapper; it returns a digest for you to verify). Either way, *you* still own verification.
+**Two ways to delegate.** Call the wrapper directly by default; this avoids spending a
+native Claude subagent merely to forward one Gemini call. Use the
+**`antigravity-delegate` subagent** only when its isolated context or restricted tool
+boundary materially helps. Either way, *you* still own verification.
 
 **Structured failures.** The wrapper exits `10` quota · `11` auth · `12` timeout · `13`
 agy-missing · `14` model-unavailable (a `--model` / `tier_*` / `default_model` name not in
@@ -149,8 +150,11 @@ permission-denied (a tool needed permission headless — BOTH agy 1.1.3's soft d
 (besides `2` failed / `3` empty). On agy ≥ 1.1.8 these are derived from the structured
 `status`/`error` envelope rather than stderr pattern-matching, so the classification is
 reliable. It prints a `AGY_SIGNAL {...}` line on stderr;
-`agy-job status`/`result` surface it, so you can react (e.g. retry quota with `--continue`,
-fix the model name, or add `--yolo`) instead of scraping prose.
+`agy-job status`/`result` surface it, so you can react instead of scraping prose. On
+Windows, `idle (no output)` is not proof of lost connectivity: structured print mode can
+stay silent during useful work. Run a short `/model` or one-file read probe; if it passes,
+split an omnibus task or retry once with a larger `--timeout`/`--idle-timeout`. Fall back
+only when the probe or bounded retry also fails.
 
 **If Claude itself is running headless (`claude -p`, one-shot):** run delegations
 **synchronously** — let `agy-delegate` BLOCK and return before you continue. Do NOT

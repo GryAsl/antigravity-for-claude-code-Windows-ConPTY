@@ -3,6 +3,16 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.25.5 — Windows silent-work timeout fix
+
+- Native Windows delegations no longer inherit a fixed 120-second idle limit. When no
+  override is configured, idle is derived just beyond the hard timeout so structured
+  print-mode work can remain silent while Gemini searches and reasons.
+- Added `--idle-timeout <seconds>` and the `idle_timeout` plugin option, with explicit
+  CLI > `AGY_BRIDGE_IDLE_TIMEOUT` > plugin option > derived-default precedence.
+- Timeout guidance now requires a small health probe before declaring one idle timeout
+  a connectivity failure or falling back to an expensive native Claude subagent.
+
 ## 0.25.4 — Persistent Flash-first delegation policy
 
 - Small, well-scoped tasks are now eligible for Antigravity delegation instead of
