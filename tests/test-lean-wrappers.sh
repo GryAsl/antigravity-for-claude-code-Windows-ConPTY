@@ -19,6 +19,7 @@ cat >"$STUB" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >"$AGY_CAPTURE.args"
 printf 'call\n' >>"$AGY_CAPTURE.calls"
+pwd >"$AGY_CAPTURE.cwd"
 cat >"$AGY_CAPTURE.stdin"
 if [ "${AGY_STUB_OVERSIZE:-0}" = 1 ]; then
   printf 'VERDICT: CONFIRMED\nFINDINGS:\n- none\nTEST_GAPS:\n- none\nCOMMIT_SUBJECT: test: fixture\n'
@@ -57,6 +58,8 @@ if AGY_DELEGATE="$STUB" AGY_CAPTURE="$CAP" "$REVIEW" --dir "$REPO" --goal "only 
     || bad "compact review output"
   has "$CAP.err" 'untracked contents are excluded' && ok "untracked review gap is explicit" \
     || bad "untracked warning"
+  [ "$(cat "$CAP.cwd")" != "$REPO" ] && ok "blind review runs outside the caller repository" \
+    || bad "blind review working directory isolation"
 else
   bad "worktree review exits zero"
 fi

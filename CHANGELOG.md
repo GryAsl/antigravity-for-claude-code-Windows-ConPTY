@@ -3,6 +3,16 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.26.1 — Optional global yolo grant
+
+- Added `AGY_ALWAYS_YOLO=1` and the `always_yolo=on` plugin option. Either makes
+  every wrapper invocation add `--dangerously-skip-permissions`, including calls where
+  Claude does not spell out `--yolo`.
+- The injected policy explicitly warns that automatic yolo is broad machine access and
+  that an omitted literal flag is not evidence that a requested write lacked permission.
+- Blind review now launches agy from its temporary payload directory rather than the
+  caller's repository directory.
+
 ## 0.26.0 — Lean scout and blind diff review
 
 - Added `agy-scout`, a short read-only Gemini 3.7 Flash entrypoint that supplies the

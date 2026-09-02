@@ -461,6 +461,14 @@ check "--print-command -> exit 0 + resolved flags" 0 "$rc" "--print-timeout 5m" 
 check "--print-command shows the tier model" 0 "$rc" "Pro" "$out"
 out=$(PATH="/usr/bin:/bin" "$DELEGATE" --print-command "hi" 2>/dev/null); rc=$?
 check "--print-command works without agy on PATH" 0 "$rc" "--print-timeout" "$out"
+out=$(AGY_ALWAYS_YOLO=1 "$DELEGATE" --print-command "hi" 2>/dev/null); rc=$?
+check "AGY_ALWAYS_YOLO globally adds the dangerous permission flag" 0 "$rc" "--dangerously-skip-permissions" "$out"
+out=$(CLAUDE_PLUGIN_OPTION_ALWAYS_YOLO=on "$DELEGATE" --print-command "hi" 2>/dev/null); rc=$?
+check "always_yolo plugin option adds the dangerous permission flag" 0 "$rc" "--dangerously-skip-permissions" "$out"
+out=$(AGY_ALWAYS_YOLO=off CLAUDE_PLUGIN_OPTION_ALWAYS_YOLO=on "$DELEGATE" --print-command "hi" 2>/dev/null); rc=$?
+if grep -qF -- '--dangerously-skip-permissions' <<<"$out"; then
+  echo "FAIL: AGY_ALWAYS_YOLO=off did not override plugin option"; FAIL=$((FAIL+1))
+else echo "ok: AGY_ALWAYS_YOLO explicitly overrides the plugin option"; PASS=$((PASS+1)); fi
 
 # write-task without --yolo -> warn (workspace untouched; issue #10).
 # --mode accept-edits stopped granting headless writes on agy 1.1.3, so it still warns.

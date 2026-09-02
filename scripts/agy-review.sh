@@ -146,7 +146,7 @@ EOF
 }
 
 run_review() { # payload file, output file, byte limit
-  AGY_DELEGATE_READ_ONLY=1 "$DELEGATE" --tier "$TIER" --digest --timeout "$TIMEOUT" - <"$1" >"$2"
+  (cd "$TMP" && AGY_DELEGATE_READ_ONLY=1 "$DELEGATE" --tier "$TIER" --digest --timeout "$TIMEOUT" - <"$1" >"$2")
   RC=$?
   [ "$RC" -eq 0 ] || { echo "agy-review: delegation failed (exit $RC)" >&2; return "$RC"; }
   SIZE="$(LC_ALL=C wc -c <"$2" | tr -d '[:space:]')"

@@ -58,6 +58,7 @@
 # agy is multi-model: tiers map to Gemini by default, but you can point delegation at any
 # model `agy models` lists (e.g. Claude/GPT on plans that expose them). Defaults via plugin
 # userConfig (env): CLAUDE_PLUGIN_OPTION_DEFAULT_TIER, _TIMEOUT, _IDLE_TIMEOUT,
+# _ALWAYS_YOLO,
 # _DEFAULT_MODEL (exact name), _USAGE_LOG, and per-tier remaps _TIER_FLASH /
 # _TIER_FLASH_LO / _TIER_PRO. Explicit flags win; AGY_BRIDGE_IDLE_TIMEOUT wins
 # over _IDLE_TIMEOUT; AGY_USAGE_LOG wins over _USAGE_LOG.
@@ -71,7 +72,11 @@ IDLE_TIMEOUT="${CLAUDE_PLUGIN_OPTION_IDLE_TIMEOUT:-}"
 IDLE_TIMEOUT_EXPLICIT=0
 TIER_EXPLICIT=0
 MODEL=""
-YOLO=0
+YOLO_RAW="${AGY_ALWAYS_YOLO:-${CLAUDE_PLUGIN_OPTION_ALWAYS_YOLO:-off}}"
+case "$(printf '%s' "$YOLO_RAW" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+  1|on|true|yes|enabled) YOLO=1 ;;
+  *)                     YOLO=0 ;;
+esac
 SANDBOX=0
 DIGEST=0
 MODE=""

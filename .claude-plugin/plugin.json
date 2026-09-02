@@ -1,6 +1,6 @@
 {
   "name": "antigravity",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "description": "Run the Antigravity CLI (Gemini) as a Claude Code sub-agent, including native Windows 11 headless support through agy-headless-bridge and ConPTY.",
   "author": {
     "name": "GryAsl"
@@ -38,6 +38,12 @@
       "title": "Native Windows idle timeout (seconds)",
       "description": "Optional no-output timeout for the Windows ConPTY bridge. Leave empty to derive it just above the hard timeout; this prevents long JSON/print turns from being killed after a fixed 120 seconds. CLI --idle-timeout and AGY_BRIDGE_IDLE_TIMEOUT override this value.",
       "default": ""
+    },
+    "always_yolo": {
+      "type": "string",
+      "title": "Always grant Antigravity all tool permissions",
+      "description": "When on, every agy-delegate call automatically passes --dangerously-skip-permissions. This is equivalent to --yolo and grants broad access to files, commands, network, and credentials available to the process. AGY_ALWAYS_YOLO overrides this option.",
+      "default": "off"
     },
     "coding_policy": {
       "type": "string",

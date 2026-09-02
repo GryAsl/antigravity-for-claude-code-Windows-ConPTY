@@ -78,6 +78,12 @@ with `--path` or reviewed as staged logical groups.
 
 For tasks that modify files, work on a separate Git branch and review the resulting diff. Use `--yolo` only when necessary: it grants Antigravity broad tool permissions.
 
+To force `--yolo` for every plugin delegation on a trusted machine, set
+`AGY_ALWAYS_YOLO=1` in Claude Code's user-level `env` settings. The equivalent plugin
+option is `always_yolo=on`. This automatically adds `--dangerously-skip-permissions` to
+`agy-delegate`, `agy-scout`, and `agy-review`; it grants access beyond `--dir`, including
+other readable/writable files, commands, network, and process-visible credentials.
+
 On native Windows, long structured/agentic calls may produce no intermediate output.
 The wrapper therefore derives its ConPTY idle limit from the task's hard timeout instead
 of killing every silent call after 120 seconds. Override it only when needed with
