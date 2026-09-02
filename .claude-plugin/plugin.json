@@ -1,11 +1,11 @@
 {
   "name": "antigravity",
-  "version": "0.25.2",
-  "description": "Run the Antigravity CLI (Gemini) as a collaborating AI inside Claude Code, with intelligent model routing across the SDLC. Claude conducts — requirements, architecture, the hard 20%, verification, review — and routes deterministic, high-volume work (scaffolding, tests, first-pass review, migrations, web/Vertex AI Search) to Antigravity. Hybrid agentic engineering; lower token cost as a financial lever.",
+  "version": "0.25.3",
+  "description": "Run the Antigravity CLI (Gemini) as a Claude Code sub-agent, including native Windows 11 headless support through agy-headless-bridge and ConPTY.",
   "author": {
-    "name": "linyuting"
+    "name": "GryAsl"
   },
-  "homepage": "https://antigravity.google/docs/cli-using",
+  "homepage": "https://github.com/GryAsl/antigravity-for-claude-code-Windows-ConPTY",
   "keywords": [
     "antigravity",
     "gemini",
@@ -16,7 +16,9 @@
     "agentic-engineering",
     "model-routing",
     "vibe-coding",
-    "deep-research"
+    "deep-research",
+    "windows",
+    "conpty"
   ],
   "userConfig": {
     "default_tier": {
@@ -64,7 +66,7 @@
     "structured_output": {
       "type": "string",
       "title": "Use agy's structured JSON output",
-      "description": "When on (default), agy-delegate runs agy with --output-format json (agy >= 1.1.8, requires python3) to classify failures from the structured error and report token usage as an AGY_USAGE line on stderr. The text on stdout is unchanged. Set to off/false/0/no to force the plain-text path.",
+      "description": "When on (default), agy-delegate runs agy with --output-format json (agy >= 1.1.8) to classify failures and report token usage as AGY_USAGE on stderr. POSIX requires python3; native Windows uses the configured ConPTY bridge interpreter. Stdout remains plain model text.",
       "default": "on"
     },
     "digest_warn_chars": {

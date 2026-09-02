@@ -43,6 +43,7 @@
 #             | 15 permission denied — a tool needed permission headless. BOTH shapes:
 #             |    agy 1.1.3's soft deny (rc 0, empty stdout) and 1.1.13's hard error
 #             |    (rc 1, "user denied permission"). Add a permissions.allow rule, or --yolo
+#             | 16 Windows ConPTY bridge/Python unavailable
 #
 # On a classifiable failure, a machine-readable line is printed to stderr so
 # orchestrators (e.g. agy-job.sh) can react without scraping prose:
@@ -59,6 +60,7 @@
 # Explicit --model/--tier win; AGY_USAGE_LOG wins over _USAGE_LOG.
 #
 set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
 
 TIER="${CLAUDE_PLUGIN_OPTION_DEFAULT_TIER:-flash}"
 TIMEOUT="${CLAUDE_PLUGIN_OPTION_TIMEOUT:-5m}"
@@ -168,9 +170,51 @@ on_wsl() { [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/version 2>/
 # without a real console (ConPTY), agy v1.0.x can hard-hang with a 0-byte log when
 # its stdio is redirected (the issue this wall-clock guard defends against).
 on_windows_native() {
+  [ "${AGY_TEST_FORCE_POSIX:-0}" = 1 ] && return 1
   case "${OSTYPE:-}" in msys*|cygwin*|win32) return 0 ;; esac
   case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; esac
   return 1
+}
+# Resolve the Windows interpreter that owns agy-headless-bridge. AGY_BRIDGE_PYTHON
+# is an executable path (not a shell command string); the default prefers the Windows
+# Python Launcher so the Microsoft Store python3 alias cannot masquerade as Python.
+BRIDGE_PY=()
+resolve_bridge_python() {
+  BRIDGE_PY=()
+  if [ -n "${AGY_BRIDGE_PYTHON:-}" ]; then
+    if [ -x "$AGY_BRIDGE_PYTHON" ] || command -v "$AGY_BRIDGE_PYTHON" >/dev/null 2>&1; then
+      BRIDGE_PY=("$AGY_BRIDGE_PYTHON")
+      return 0
+    fi
+    return 1
+  fi
+  if command -v py >/dev/null 2>&1 && py -3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+    BRIDGE_PY=(py -3); return 0
+  fi
+  if command -v python >/dev/null 2>&1 && python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+    BRIDGE_PY=(python); return 0
+  fi
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+    BRIDGE_PY=(python3); return 0
+  fi
+  return 1
+}
+# Convert a Git Bash/MSYS path before handing it to native Windows Python.
+windows_path() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -aw "$1"; else printf '%s\n' "$1"; fi
+}
+# Convert an agy duration (5m, 300s, 1h, or bare seconds) to whole seconds.
+duration_secs() {
+  local d="${1:-5m}" n unit secs
+  n="${d%[smh]}"; unit="${d#"$n"}"
+  case "$n" in (*[!0-9]*|'') n=300; unit=s ;; esac
+  case "$unit" in
+    h) secs=$(( n * 3600 )) ;;
+    m) secs=$(( n * 60 )) ;;
+    s|'') secs=$(( n )) ;;
+    *) secs=$(( n )) ;;
+  esac
+  printf '%s\n' "$secs"
 }
 
 # Resolve a usable `timeout`-style command: GNU coreutils `timeout`, or macOS
@@ -187,15 +231,7 @@ timeout_cmd() {
 # whole seconds, then add a small head-room margin so the OUTER wall-clock guard
 # fires only AFTER agy's own --print-timeout has had its chance. Echoes seconds.
 outer_timeout_secs() {
-  local d="${1:-5m}" n unit secs
-  n="${d%[smh]}"; unit="${d#"$n"}"
-  case "$n" in (*[!0-9]*|'') n=300; unit=s ;; esac
-  case "$unit" in
-    h) secs=$(( n * 3600 )) ;;
-    m) secs=$(( n * 60 )) ;;
-    s|'') secs=$(( n )) ;;
-    *) secs=$(( n )) ;;
-  esac
+  local secs; secs="$(duration_secs "${1:-5m}")"
   # head-room so the OUTER guard never pre-empts agy's own --print-timeout on a
   # legitimately-slow-but-progressing call: +25% of the budget, min 10s, capped 120s.
   local pad=$(( secs / 4 ))
@@ -230,7 +266,9 @@ done
 
 [ -n "$PROMPT" ] || die "no prompt given (pass a string, or '-' to read stdin)"
 # --print-command is a dry run (introspection), so it doesn't require agy on PATH.
-if [ "$PRINT_CMD" -ne 1 ] && ! command -v agy >/dev/null 2>&1; then
+# On Windows the bridge also honours AGY_PATH and agy's default install dirs.
+if [ "$PRINT_CMD" -ne 1 ] && ! command -v agy >/dev/null 2>&1 \
+   && ! on_windows_native; then
   echo "agy-delegate: 'agy' not found on PATH — install the Antigravity CLI first" >&2
   signal AGY_MISSING "agy not on PATH"
   exit 13
@@ -308,12 +346,21 @@ fi
 # NOTE: in agy, -p/--print/--prompt TAKES THE PROMPT AS ITS VALUE, so it must come
 # last with the prompt attached. Other flags go before it.
 ARGS=(--model "$MODEL" --print-timeout "$TIMEOUT")
+BRIDGE_EXTRA_ARGS=()
 for d in "${ADD_DIRS[@]:-}"; do [ -n "$d" ] && ARGS+=(--add-dir "$d"); done
-[ "$YOLO" -eq 1 ]      && ARGS+=(--dangerously-skip-permissions)
-[ -n "$MODE" ]         && ARGS+=(--mode "$MODE")     # agy >= 1.1.0
-[ "$SANDBOX" -eq 1 ]   && ARGS+=(--sandbox)
-[ "$CONTINUE" -eq 1 ]  && ARGS+=(--continue)        # keep working context on the cheap (Gemini) side
-[ -n "$CONV_ID" ]      && ARGS+=(--conversation "$CONV_ID")
+if [ "$YOLO" -eq 1 ]; then
+  ARGS+=(--dangerously-skip-permissions); BRIDGE_EXTRA_ARGS+=(--dangerously-skip-permissions)
+fi
+if [ -n "$MODE" ]; then
+  ARGS+=(--mode "$MODE"); BRIDGE_EXTRA_ARGS+=(--mode "$MODE") # agy >= 1.1.0
+fi
+if [ "$SANDBOX" -eq 1 ]; then ARGS+=(--sandbox); BRIDGE_EXTRA_ARGS+=(--sandbox); fi
+if [ "$CONTINUE" -eq 1 ]; then
+  ARGS+=(--continue); BRIDGE_EXTRA_ARGS+=(--continue) # keep context on the Gemini side
+fi
+if [ -n "$CONV_ID" ]; then
+  ARGS+=(--conversation "$CONV_ID"); BRIDGE_EXTRA_ARGS+=(--conversation "$CONV_ID")
+fi
 
 # --- structured output (agy >= 1.1.8) -----------------------------------------
 # agy gained `--output-format json`, which is strictly better for a wrapper than
@@ -340,15 +387,28 @@ TO_CMD="$(timeout_cmd || true)"
 # exists. Declaring them empty up front means the probe's file is covered too —
 # it used to be cleaned by a trailing `rm -f`, which a SIGINT during the probe
 # skips. `rm -f ""` is a silent no-op, so the unset ones cost nothing.
-HELPF=""; ERR=""; OUTF=""
-trap 'rm -f "$HELPF" "$ERR" "$OUTF" 2>/dev/null' EXIT
+HELPF=""; ERR=""; OUTF=""; REQF=""; PROMPTF=""
+trap 'rm -f "$HELPF" "$ERR" "$OUTF" "$REQF" "$PROMPTF" 2>/dev/null' EXIT
 
 JSON_MODE=0
+JSON_PY=()
 raw_so="${CLAUDE_PLUGIN_OPTION_STRUCTURED_OUTPUT:-on}"
 case "$(printf '%s' "$raw_so" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
   off|false|0|no|disabled) ;;
   *)
-    if [ "$PRINT_CMD" -ne 1 ] && command -v python3 >/dev/null 2>&1; then
+    if [ "$PRINT_CMD" -ne 1 ] && on_windows_native; then
+      if ! resolve_bridge_python; then
+        echo "agy-delegate: Python >= 3.9 not found for the Windows ConPTY bridge" >&2
+        signal BRIDGE_UNAVAILABLE "set AGY_BRIDGE_PYTHON to a Python >= 3.9 executable"
+        exit 16
+      fi
+      # Probing `agy --help` directly is the no-ConPTY call that can hang. Native
+      # Windows support therefore requires modern agy (>=1.1.8) and enables JSON.
+      JSON_PY=("${BRIDGE_PY[@]}")
+      JSON_MODE=1
+      ARGS+=(--output-format json)
+      BRIDGE_EXTRA_ARGS+=(--output-format json)
+    elif [ "$PRINT_CMD" -ne 1 ] && command -v python3 >/dev/null 2>&1; then
       # Capability probe. Deliberately NOT `agy --help | grep -q`: `grep -q` exits at
       # the first match and closes the pipe, so `agy --help` can die of SIGPIPE (141)
       # and, under `set -o pipefail`, the whole pipeline reads as "failed" — silently
@@ -368,7 +428,9 @@ case "$(printf '%s' "$raw_so" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
       # `|| true` so the assignment cannot fail under `set -e` and skip the rm.
       agy_help="$(cat "$HELPF" 2>/dev/null || true)"; rm -f "$HELPF"
       case "$agy_help" in
-        *--output-format*) JSON_MODE=1; ARGS+=(--output-format json) ;;
+        *--output-format*)
+          JSON_MODE=1; JSON_PY=(python3); ARGS+=(--output-format json)
+          BRIDGE_EXTRA_ARGS+=(--output-format json) ;;
       esac
     fi ;;
 esac
@@ -389,22 +451,67 @@ ERR="$(mktemp "${TMPDIR:-/tmp}/agy-delegate.XXXXXX")"
 # file is inherited harmlessly.
 OUTF="$(mktemp "${TMPDIR:-/tmp}/agy-out.XXXXXX")"
 
-# Wall-clock guard: on a non-TTY caller (the whole point of this wrapper), agy can
-# hard-hang before its own --print-timeout engages (notably native Windows without
-# a ConPTY — see issue #6). Wrap in GNU `timeout`/`gtimeout` when available so we
-# always return instead of hanging forever. `timeout` exits 124 on kill -> map to
-# our TIMEOUT (12) and emit the structured signal, so orchestrators react cleanly.
+# POSIX uses the existing outer wall-clock guard. Native Windows instead runs through
+# agy-headless-bridge, whose ConPTY runner owns hard + idle timeouts in-process.
 TO_SECS="$(outer_timeout_secs "$TIMEOUT")"
 
-if on_windows_native && [ -z "$TO_CMD" ]; then
-  # Native Windows + no timeout binary = highest hang risk with no safety net.
-  echo "agy-delegate: WARNING — native Windows without GNU \`timeout\`/\`gtimeout\` on PATH." >&2
-  echo "agy-delegate:   headless \`agy -p\` can hang here with a 0-byte log (no ConPTY). If this" >&2
-  echo "agy-delegate:   call never returns, run from WSL/macOS/Linux, or install coreutils \`timeout\`." >&2
-fi
-
 set +e
-if [ -n "$TO_CMD" ]; then
+if on_windows_native; then
+  if [ "${#BRIDGE_PY[@]}" -eq 0 ] && ! resolve_bridge_python; then
+    echo "agy-delegate: Python >= 3.9 not found for the Windows ConPTY bridge" >"$ERR"
+    RC=16
+  else
+    BASE_SECS="$(duration_secs "$TIMEOUT")"
+    BRIDGE_HARD_TIMEOUT="${AGY_BRIDGE_TIMEOUT:-$(( BASE_SECS + 15 ))}"
+    BRIDGE_IDLE_TIMEOUT="${AGY_BRIDGE_IDLE_TIMEOUT:-120}"
+    case "$BRIDGE_HARD_TIMEOUT:$BRIDGE_IDLE_TIMEOUT" in
+      *[!0-9:]*|:*|*:) echo "agy-delegate: AGY_BRIDGE_TIMEOUT and AGY_BRIDGE_IDLE_TIMEOUT must be positive integer seconds" >"$ERR"; RC=16 ;;
+      0:*|*:0) echo "agy-delegate: AGY_BRIDGE_TIMEOUT and AGY_BRIDGE_IDLE_TIMEOUT must be greater than zero" >"$ERR"; RC=16 ;;
+      *)
+        REQF="$(mktemp "${TMPDIR:-/tmp}/agy-request.XXXXXX")"
+        PROMPTF="$(mktemp "${TMPDIR:-/tmp}/agy-prompt.XXXXXX")"
+        printf '%s' "$PROMPT" >"$PROMPTF"
+        REQ_WIN="$(windows_path "$REQF")"
+        PROMPT_WIN="$(windows_path "$PROMPTF")"
+        ADAPTER_WIN="$(windows_path "$HERE/agy-windows-bridge.py")"
+        AGY_PATH_WIN=""
+        [ -n "${AGY_PATH:-}" ] && AGY_PATH_WIN="$(windows_path "$AGY_PATH")"
+        BRIDGE_DIRS=()
+        for d in "${ADD_DIRS[@]}"; do BRIDGE_DIRS+=("$(windows_path "$d")"); done
+
+        # Build the UTF-8 request with the selected Windows interpreter. The prompt
+        # travels in a file, not argv/environment, so long prompts avoid Win32 limits.
+        "${BRIDGE_PY[@]}" - "$REQ_WIN" "$PROMPT_WIN" "$MODEL" "$AGY_PATH_WIN" \
+          "$BRIDGE_HARD_TIMEOUT" "$BRIDGE_IDLE_TIMEOUT" "$JSON_MODE" \
+          "${#BRIDGE_DIRS[@]}" "${BRIDGE_DIRS[@]}" -- "${BRIDGE_EXTRA_ARGS[@]}" <<'PY' 2>"$ERR"
+import json, pathlib, sys
+req, prompt_file, model, agy_path, hard, idle, structured, count = sys.argv[1:9]
+n = int(count)
+dirs = sys.argv[9:9+n]
+rest = sys.argv[9+n:]
+if rest[:1] == ["--"]:
+    rest = rest[1:]
+data = {
+    "prompt": pathlib.Path(prompt_file).read_text(encoding="utf-8"),
+    "model": model or None,
+    "agy_path": agy_path or None,
+    "add_dirs": dirs,
+    "timeout": int(hard),
+    "idle_timeout": int(idle),
+    "structured_output": structured == "1",
+    "extra_args": rest,
+}
+pathlib.Path(req).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+PY
+        if [ $? -ne 0 ]; then
+          RC=16
+        else
+          "${BRIDGE_PY[@]}" "$ADAPTER_WIN" "$REQ_WIN" < /dev/null >"$OUTF" 2>"$ERR"
+          RC=$?
+        fi ;;
+    esac
+  fi
+elif [ -n "$TO_CMD" ]; then
   # --kill-after sends SIGKILL if agy ignores the initial SIGTERM (defensive).
   "$TO_CMD" --kill-after=10 "$TO_SECS" agy "${ARGS[@]}" -p "$PROMPT" < /dev/null >"$OUTF" 2>"$ERR"
   RC=$?
@@ -434,10 +541,17 @@ if [ "$JSON_MODE" -eq 1 ] && [[ "$OUT" = *[!$' \t\n\r']* ]]; then
   # "agy failed" (exit 2) instead of MODEL_UNAVAILABLE (14). Let python, which already
   # has the parsed object, write the raw value out.
   JERR="$(mktemp "${TMPDIR:-/tmp}/agy-err.XXXXXX")"
-  meta="$(AGY_JSON="$OUT" AGY_RESP_FILE="$RESP" AGY_ERR_FILE="$JERR" python3 - <<'PY' 2>/dev/null || true
+  JSON_INPUT_PY="$OUTF"; RESP_PY="$RESP"; JERR_PY="$JERR"
+  if on_windows_native; then
+    JSON_INPUT_PY="$(windows_path "$OUTF")"
+    RESP_PY="$(windows_path "$RESP")"
+    JERR_PY="$(windows_path "$JERR")"
+  fi
+  meta="$(AGY_JSON_FILE="$JSON_INPUT_PY" AGY_RESP_FILE="$RESP_PY" AGY_ERR_FILE="$JERR_PY" "${JSON_PY[@]}" - <<'PY' 2>/dev/null || true
 import json, os, sys
-raw = os.environ.get("AGY_JSON", "")
 try:
+    with open(os.environ["AGY_JSON_FILE"], encoding="utf-8") as fh:
+        raw = fh.read()
     # strict=False: agy 1.1.8 leaves raw newlines inside "response".
     d = json.loads(raw, strict=False)
     if not isinstance(d, dict): raise ValueError
@@ -475,13 +589,33 @@ PY
   rm -f "$RESP" "$JERR"
 fi
 
+# Adapter-owned failures preserve the public wrapper codes and partial timeout output.
+if on_windows_native; then
+  case "$RC" in
+    12)
+      [[ "$OUT" = *[!$' \t\n\r']* ]] && printf '%s\n' "$OUT"
+      [ -s "$ERR" ] && cat "$ERR" >&2
+      signal TIMEOUT "Windows ConPTY bridge timeout"
+      exit 12 ;;
+    13)
+      [ -s "$ERR" ] && cat "$ERR" >&2
+      signal AGY_MISSING "agy not found by Windows ConPTY bridge"
+      exit 13 ;;
+    16)
+      [ -s "$ERR" ] && cat "$ERR" >&2
+      signal BRIDGE_UNAVAILABLE "Python or agy-headless-bridge unavailable"
+      exit 16 ;;
+    3)
+      [ -s "$ERR" ] && cat "$ERR" >&2
+      echo "agy-delegate: agy returned empty output through ConPTY (model='$MODEL')" >&2
+      exit 3 ;;
+  esac
+fi
+
 # `timeout` exits 124 (SIGTERM) or 137 (SIGKILL after --kill-after) when it had to
 # kill agy. Treat that as our structured TIMEOUT (exit 12), not a generic failure.
-if [ -n "$TO_CMD" ] && { [ $RC -eq 124 ] || [ $RC -eq 137 ]; }; then
+if ! on_windows_native && [ -n "$TO_CMD" ] && { [ $RC -eq 124 ] || [ $RC -eq 137 ]; }; then
   echo "agy-delegate: agy hit the wall-clock guard (${TO_SECS}s) and was terminated — likely a headless/no-TTY hang." >&2
-  if on_windows_native; then
-    echo "agy-delegate:   native Windows: agy needs a console (ConPTY); run delegation from WSL/macOS/Linux." >&2
-  fi
   signal TIMEOUT "agy wall-clock guard fired after ${TO_SECS}s (headless/no-TTY hang?)"
   exit 12
 fi

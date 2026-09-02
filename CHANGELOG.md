@@ -3,6 +3,19 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.25.3 — Windows ConPTY fork
+
+- Native Windows 11 headless delegation now routes through the unchanged
+  `agy-headless-bridge` package and Windows ConPTY; macOS/Linux/WSL keep the upstream
+  direct launch path.
+- Added a UTF-8 JSON request adapter that forwards model, workspace, permission/mode,
+  sandbox, conversation, structured-output, hard-timeout, and idle-timeout settings
+  without putting long prompts on the Windows command line.
+- Preserved the public stdout, `AGY_USAGE`, `AGY_SIGNAL`, partial-timeout, and structured
+  exit-code contracts. Added exit 16 for a missing/mismatched bridge interpreter.
+- `agy-doctor`, the SessionStart health check, Windows documentation, and regression
+  tests now understand the ConPTY dependency and avoid direct headless Windows probes.
+
 ## 0.25.2
 
 - **agy-delegate.sh no longer burns a CPU core on large outputs on macOS.** The two

@@ -197,10 +197,10 @@ come from delegation. In enforcement-strength order:
 3. **Hard enforcement:** per-user/group **spend caps and RBAC via a gateway**
    (e.g. Claude apps gateway on GCP — caps return HTTP 429 at the limit). CLAUDE.md asks;
    gateways enforce. A spend cap also nudges delegation *without* dictating model choice.
-4. **Windows fleets:** native Windows headless delegation is not supported upstream
-   (hard-hang without a console — antigravity-cli#508). **Require WSL2** for
-   participating Windows developers, with the repo on the WSL Linux filesystem
-   (`~/...`, never `/mnt/c/...`).
+4. **Windows fleets:** this fork supports native Windows 11 through
+   `agy-headless-bridge` + ConPTY. Standardize Python 3.9+, the bridge package, and agy
+   versions across the cohort; require `agy-doctor` to pass before measurement. WSL2
+   remains an alternative, with repos on its Linux filesystem (`~/...`, not `/mnt/c/...`).
 
 ## 7. Report template
 

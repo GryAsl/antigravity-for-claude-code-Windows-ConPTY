@@ -1,17 +1,17 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "antigravity-for-claude-code",
-  "description": "Run the Antigravity CLI (Gemini) as a collaborating AI inside Claude Code, with intelligent model routing across the SDLC.",
+  "description": "Claude Code + Antigravity orchestration with native Windows ConPTY support.",
   "owner": {
-    "name": "linyuting"
+    "name": "GryAsl"
   },
   "plugins": [
     {
       "name": "antigravity",
-      "description": "Hybrid Claude Code + Antigravity (Gemini) workflow: Claude conducts requirements/architecture/the hard 20%/verification, and routes deterministic, high-volume work (scaffolding, tests, first-pass review, migrations, web/Vertex AI Search) to Antigravity. Lower token cost as a financial lever.",
+      "description": "Hybrid Claude Code + Antigravity workflow with native Windows 11 support through agy-headless-bridge and ConPTY.",
       "source": "./",
       "category": "ai",
-      "keywords": ["antigravity", "gemini", "multi-agent", "sdlc", "model-routing"]
+      "keywords": ["antigravity", "gemini", "multi-agent", "sdlc", "model-routing", "windows", "conpty"]
     }
   ]
 }

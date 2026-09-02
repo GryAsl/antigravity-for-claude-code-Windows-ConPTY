@@ -23,7 +23,7 @@ model runs, so marketplace installs saw an empty path ([#11](https://github.com/
 
 ---
 
-## Windows: delegation hangs, or exits 12 (TIMEOUT) with a 0-byte log
+## Windows: ConPTY setup, missing bridge, or timeout
 
 **Cause (upstream, not the plugin):** on native Windows, headless `agy` needs a real
 console (ConPTY). When the plugin runs it as a child process with redirected stdio there
@@ -34,16 +34,29 @@ is no console, and agy v1.0.x can hard-hang before producing any output
 console (interactive mode). Invoked by the plugin, it runs headless (no console). That's
 the difference, not Windows vs the plugin.
 
-What the plugin does about it: a wall-clock guard (`timeout`/`gtimeout`) turns the hang
-into a clean **TIMEOUT (exit 12)** instead of a freeze, and `agy-doctor` reports "headless
-hang" instead of the misleading "not authenticated".
+This fork fixes that launch path by running agy in a fresh Windows ConPTY through the
+unchanged `agy-headless-bridge` PyPI package. WSL is optional, not required.
 
-**Fix: use WSL** (fully supported):
-1. `wsl --install` (one-time; reboot)
-2. Install Claude Code **and** the Antigravity CLI *inside* WSL; authenticate agy there
-   (`agy models` should list models)
-3. Keep your repo on the WSL Linux filesystem (`~/project`), **not** `/mnt/c/...`
-4. Run `/antigravity:setup` from WSL — it should go green
+```powershell
+agy                                      # authenticate interactively once
+py -3 -m pip install -U agy-headless-bridge
+```
+
+Then run `agy-doctor` or `/antigravity:setup`.
+
+| symptom | fix |
+|---|---|
+| exit 16 / bridge package missing | `py -3 -m pip install -U agy-headless-bridge` |
+| package is installed but doctor cannot import it | it is in a different interpreter; set `AGY_BRIDGE_PYTHON` to that `python.exe`, or install with the interpreter doctor prints |
+| `No module named winpty` / ConPTY backend failure | `py -3 -m pip install -U --force-reinstall pywinpty agy-headless-bridge` |
+| `agy` not found (exit 13) | put `agy.exe` on PATH or set `AGY_PATH` to its full path |
+| auth required (exit 11) | run `agy` once in a real terminal and finish sign-in |
+| model unavailable (exit 14) | check models interactively and remap `tier_flash`, `tier_flash_lo`, or `tier_pro` |
+| idle/hard timeout (exit 12) | check network/MCP startup; narrow the task or raise `AGY_BRIDGE_IDLE_TIMEOUT` / `AGY_BRIDGE_TIMEOUT` |
+
+`AGY_BRIDGE_PYTHON` must be an executable path, not a shell command string. The default
+is `py -3`, then a working `python` fallback. `agy-doctor` reports the exact interpreter
+and bridge version it resolved.
 
 ---
 
@@ -155,7 +168,7 @@ On classifiable failures the wrapper prints a machine-readable line to stderr:
 | 13 | agy not on PATH | install the Antigravity CLI |
 | 14 | model unavailable | the `--model` / `tier_*` / `default_model` name isn't in `agy models` (agy ≥ 1.1.2 hard-fails instead of silently downgrading) — run `agy models` and fix the name |
 | 15 | permission denied | a tool needed permission headless — **both** shapes: agy 1.1.3's soft deny (rc 0, empty stdout) and 1.1.13's hard error (`user denied permission`). Add a `permissions.allow` rule covering the target, or pass `--yolo`; run on a branch |
-| 16 | python3 not on PATH (`agy-migrate` only) | install python3 (`brew install python3`) |
+| 16 | bridge/Python unavailable (`agy-delegate` on Windows), or python3 missing (`agy-migrate`) | run `agy-doctor`; install the bridge with the reported interpreter, or install python3 for migration |
 | 17 | one or more migration steps failed (`agy-migrate` only) | read the named steps; the run is still revertible with `agy-migrate --uninstall --apply` |
 | 18 | prerequisite missing (`agy-migrate` only) | no Claude Code config dir, or agy has never been run |
 

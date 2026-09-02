@@ -6,6 +6,10 @@
 #   bash tests/run-tests.sh
 #
 set -uo pipefail
+# The legacy stub suite exercises the unchanged POSIX launch path even when run from
+# Git Bash. Dedicated adapter tests below cover the native-Windows ConPTY branch.
+export AGY_TEST_FORCE_POSIX=1
+export PYTHONUTF8=1
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 DELEGATE="$ROOT/scripts/agy-delegate.sh"
@@ -14,6 +18,17 @@ MEASURE="$ROOT/scripts/measure-session.py"
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 PASS=0; FAIL=0
+
+# Git Bash often exposes the Microsoft Store `python3` alias (which exists but cannot
+# run) while the real Windows launcher is `py -3`. Install a temp shim so the upstream
+# POSIX-oriented suite and its minimal-PATH fixtures use the same working interpreter.
+if ! python3 -c 'import sys' >/dev/null 2>&1 && command -v py >/dev/null 2>&1; then
+  mkdir -p "$TMP/python-shim"
+  PY_LAUNCHER="$(command -v py)"
+  printf '#!/usr/bin/env bash\nexec "%s" -3 "$@"\n' "$PY_LAUNCHER" >"$TMP/python-shim/python3"
+  chmod +x "$TMP/python-shim/python3"
+  export PATH="$TMP/python-shim:$PATH"
+fi
 
 # The shipped tier defaults, read from the wrapper — the single source of truth. Every
 # stub `agy models` list and every expectation below uses these, so changing a default is
@@ -80,6 +95,11 @@ order_case quoted-mention 0 'echo "hlp to be defined"\nhlp() { :; }'
 
 has() { case "$2" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 
+if python3 "$HERE/test-windows-bridge.py" >/dev/null; then
+  echo "ok: Windows bridge adapter contract tests"; PASS=$((PASS+1))
+else
+  echo "FAIL: Windows bridge adapter contract tests"; FAIL=$((FAIL+1))
+fi
 
 # --- stub `agy` on PATH; behavior controlled by $STUB_MODE -------------------
 mkdir -p "$TMP/bin"
@@ -167,7 +187,8 @@ export PATH="$TMP/bin:$PATH"
 # /usr/bin (GitHub-hosted ubuntu does — so PATH=/usr/bin:/bin would still find it).
 mkdir -p "$TMP/min"
 for u in bash sh env dirname basename pwd sed cat mktemp grep tr cut find wc head tail sort uniq sleep python3 rm chmod; do
-  s="$(command -v "$u" 2>/dev/null)" && ln -sf "$s" "$TMP/min/$u"
+  s="$(command -v "$u" 2>/dev/null)"
+  case "$s" in */*) ln -sf "$s" "$TMP/min/$u" ;; esac
 done
 
 check() { # desc  expected_rc  actual_rc  [substr]  [actual_out]

@@ -58,6 +58,7 @@ rc_label() {
     14) echo 'MODEL unavailable — check `agy models` / tier remap' ;;
     # Both denial shapes: agy 1.1.3's soft deny and 1.1.13's hard error.
     15) echo 'PERMISSION denied (soft on 1.1.3+, a hard error by 1.1.13) — add a permissions.allow rule, or --yolo' ;;
+    16) echo 'Windows ConPTY bridge unavailable — check Python and agy-headless-bridge' ;;
     *)  echo 'error' ;;
   esac
 }

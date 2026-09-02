@@ -6,7 +6,7 @@
 ![Antigravity for Claude Code — Claude directs, Gemini executes](docs/hero.png)
 Claude conducts the judgement; Gemini does the heavy lifting — intelligent model routing across the SDLC.
 
-[![CI](https://github.com/yuting0624/antigravity-for-claude-code/actions/workflows/ci.yml/badge.svg)](https://github.com/yuting0624/antigravity-for-claude-code/actions/workflows/ci.yml)
+[![CI](https://github.com/GryAsl/antigravity-for-claude-code-Windows-ConPTY/actions/workflows/ci.yml/badge.svg)](https://github.com/GryAsl/antigravity-for-claude-code-Windows-ConPTY/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-5A4FCF?logo=claudecode&logoColor=#D97757)
 [![Antigravity CLI](https://img.shields.io/badge/Antigravity%20CLI-agy-4285F4?logo=googlegemini&logoColor=white)](https://antigravity.google/docs/cli-using)
@@ -14,6 +14,10 @@ Claude conducts the judgement; Gemini does the heavy lifting — intelligent mod
 </div>
 
 ---
+
+> This fork keeps the upstream orchestration model and adds native Windows 11
+> headless execution through `agy-headless-bridge` + ConPTY. Bridge source is not
+> vendored or modified.
 
 ## ⚡ Quick look
 
@@ -71,14 +75,30 @@ On a **large** ADK multi-agent build (+ `adk eval`), same task / same model, 3 w
 
 In Claude Code:
 ```
-/plugin marketplace add yuting0624/antigravity-for-claude-code
+/plugin marketplace add GryAsl/antigravity-for-claude-code-Windows-ConPTY
 /plugin install antigravity@antigravity-for-claude-code
 /antigravity:setup        # verifies agy is installed + authenticated
 ```
 
 **Prerequisites:** the [Antigravity CLI](https://antigravity.google/docs/cli-using) (`agy`) installed & authenticated (`agy models` lists Gemini models), and Claude Code. For the same-bill cost benefit, run Claude Code on Vertex too.
 
-**Platform support:** macOS, Linux, and **WSL** are the supported targets for headless delegation. **Native Windows (Git Bash/MSYS) is not recommended** — `agy -p` can hang with a 0-byte log when run without a real console (ConPTY); see [issue #6](https://github.com/yuting0624/antigravity-for-claude-code/issues/6). The wrapper now bounds this with a wall-clock guard (GNU `timeout`/`gtimeout`, returning a clean TIMEOUT instead of hanging), and `doctor` distinguishes a hang from an auth failure — but for reliable headless use, run from **WSL/macOS/Linux**.
+**Native Windows 11 is supported by this fork** through
+[`agy-headless-bridge`](https://github.com/rhishi99/agy-headless-bridge) + Windows
+ConPTY. WSL is not required. Install the Windows dependency with the same Python that
+the plugin will use:
+
+```powershell
+# agy must already be installed and authenticated; run it once interactively
+agy
+py -3 -m pip install -U agy-headless-bridge
+```
+
+Then run `/antigravity:setup`. Native Windows requires Python 3.9+ and a modern agy
+with structured output support (agy >= 1.1.8; current agy recommended). macOS, Linux,
+and WSL retain the upstream direct-`agy` path and do not require the bridge package.
+
+Windows overrides: `AGY_BRIDGE_PYTHON` (path to `python.exe`), `AGY_PATH`,
+`AGY_BRIDGE_TIMEOUT` (hard ceiling, seconds), and `AGY_BRIDGE_IDLE_TIMEOUT` (seconds).
 
 ## 🧩 Slash commands
 
@@ -262,7 +282,11 @@ Delegation doesn't save money by itself — these do (also in the skill):
   was reported *not* to match. Either way: run write tasks on a branch and verify with
   `git status`; the wrapper maps either denial shape — the soft one and 1.1.13's hard
   error — to exit `15`.
-- **Native Windows (no ConPTY):** headless `agy -p` / `agy models` can hard-hang with a 0-byte log when stdio is redirected ([issue #6](https://github.com/yuting0624/antigravity-for-claude-code/issues/6)). The wrapper wraps agy in a wall-clock `timeout`/`gtimeout` guard so it returns a structured TIMEOUT (exit 12) instead of hanging; `doctor` reports the likely hang instead of a misleading "not authenticated". Without `timeout` on PATH there's no safety net — use **WSL/macOS/Linux** for headless delegation.
+- **Native Windows:** this fork launches headless agy inside a fresh ConPTY through
+  `agy-headless-bridge`; hard and idle timeouts are enforced by the bridge. ConPTY
+  combines the child's terminal streams, so the wrapper uses agy's structured JSON
+  envelope to retain usage and error classification. Run `agy-doctor` after changing
+  Python, agy, or bridge versions.
 - **WSL:** running agy with `--add-dir` on a Windows mount (`/mnt/c/...`) is very slow — agy reads the workspace over a 9p bridge, so even trivial calls can take 20s+. Keep the repo on the WSL Linux filesystem (`~`). The wrapper and `doctor` warn about this.
 
 </details>
@@ -277,15 +301,15 @@ agents/           antigravity-delegate subagent (file work runs on Gemini, not C
 commands/         slash commands (delegate, review, research, media, cloud-run-debug, setup, status, result, cancel)
 hooks/            SessionStart: agy health check + auto-inject the cost-aware policy
 bin/              PATH shims (bare names): agy-delegate · agy-job · agy-cost-compare · agy-doctor · cloud-debug · agy-trace · agy-media · measure-session · agy-migrate
-scripts/          agy-delegate · agy-job · agy-cost-compare · cloud-debug · agy-trace · agy-media · measure-session · doctor · agy-migrate
+scripts/          agy-delegate · agy-windows-bridge · agy-job · agy-cost-compare · cloud-debug · agy-trace · agy-media · measure-session · doctor · agy-migrate
 docs/             AB-RESULTS (measured A/B) · POC-PLAYBOOK · TROUBLESHOOTING · DEMO-KIT
 prices.json       Vertex rate config (verify before quoting)
 ```
 
 **Local development** (hack on the plugin — loads live files, `$CLAUDE_PLUGIN_ROOT` resolves):
 ```bash
-git clone https://github.com/yuting0624/antigravity-for-claude-code ~/antigravity-for-claude-code
-claude --plugin-dir ~/antigravity-for-claude-code
+git clone https://github.com/GryAsl/antigravity-for-claude-code-Windows-ConPTY ~/antigravity-for-claude-code-Windows-ConPTY
+claude --plugin-dir ~/antigravity-for-claude-code-Windows-ConPTY
 ```
 
 **Tests** (no dependencies; stubs `agy`):

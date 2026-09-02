@@ -48,6 +48,25 @@ agy_guard() { # usage: agy_guard <secs> <agy-args...>
   # that is the capture pipe they can hold it open forever and the substitution never
   # returns, even after `timeout` kills agy (issue #37). `cat` always exits.
   local secs="$1"; shift
+  if on_windows_native; then
+    local model out rc any=1
+    case "${1:-}" in
+      --version)
+        # A direct redirected version probe can hit the same native-Windows console
+        # bug. The real /model probes below prove the modern CLI path instead.
+        return 0 ;;
+      models)
+        for model in \
+          "${CLAUDE_PLUGIN_OPTION_TIER_FLASH:-Gemini 3.7 Flash (High)}" \
+          "${CLAUDE_PLUGIN_OPTION_TIER_FLASH_LO:-Gemini 3.7 Flash (Low)}" \
+          "${CLAUDE_PLUGIN_OPTION_TIER_PRO:-Gemini 3.1 Pro (High)}"; do
+          out="$("$HERE/agy-delegate.sh" --model "$model" --timeout "${secs}s" "/model" 2>/dev/null)"; rc=$?
+          if [ "$rc" -eq 0 ] && [ -n "$out" ]; then printf '%s\n' "$out"; any=0; fi
+          [ "$rc" -eq 11 ] && return 11
+        done
+        return "$any" ;;
+    esac
+  fi
   local f rc
   f="$(mktemp "${TMPDIR:-/tmp}/agy-guard.XXXXXX")"
   if [ -n "$TO_CMD" ]; then
@@ -63,7 +82,14 @@ agy_guard() { # usage: agy_guard <secs> <agy-args...>
 # the plugin's side, so surface them: a hang there is a config symptom, not bad auth.
 # Prints the count and returns 0 when at least one is configured.
 has_stdio_mcp() {
-  command -v python3 >/dev/null 2>&1 || return 1
+  local py=()
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys' >/dev/null 2>&1; then
+    py=(python3)
+  elif command -v py >/dev/null 2>&1 && py -3 -c 'import sys' >/dev/null 2>&1; then
+    py=(py -3)
+  else
+    return 1
+  fi
   # TWO sources, per agy's own embedded docs:
   #   "Global Configuration: ~/.gemini/config/mcp_config.json (applies to all ...)"
   #   "Plugin Configuration: plugins/<plugin_name>/mcp_config.json (active ...)"
@@ -75,7 +101,7 @@ has_stdio_mcp() {
   for p in "$root"/plugins/*/mcp_config.json; do
     [ -r "$p" ] && files+=("$p")
   done
-  python3 -c '
+  "${py[@]}" -c '
 import json, sys
 n = 0
 for path in sys.argv[1:]:
@@ -111,9 +137,16 @@ sys.exit(0 if n else 1)
 # the grant simply is not there and the write is soft-denied for no visible reason.
 # Same typo, opposite failures, no message either time.
 bad_allow_rules() {   # $1 = the allow rules, one per line
-  command -v python3 >/dev/null 2>&1 || return 1
+  local py=()
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys' >/dev/null 2>&1; then
+    py=(python3)
+  elif command -v py >/dev/null 2>&1 && py -3 -c 'import sys' >/dev/null 2>&1; then
+    py=(py -3)
+  else
+    return 1
+  fi
   [ -n "${1:-}" ] || return 1
-  python3 -c '
+  "${py[@]}" -c '
 import re, shlex, sys
 
 # Rules arrive as text, one per line, so the SOURCE is the callers business — the file
@@ -203,6 +236,17 @@ sys.exit(0 if bad else 1)
 # need to guess: `-p /permissions` returns what agy RESOLVED, one
 # `<scope>\t<action>\t<rule>` record per line, with no agent turn and no tokens.
 allow_rules() {
+  if on_windows_native; then
+    local resolved
+    resolved="$("$HERE/agy-delegate.sh" \
+      --model "${CLAUDE_PLUGIN_OPTION_TIER_FLASH:-Gemini 3.7 Flash (High)}" \
+      --timeout 30s "/permissions" 2>/dev/null)"
+    if [ -n "$resolved" ]; then
+      printf '%s\n' "$resolved" | awk -F'\t' '$2 == "allow" && $3 != "" { print $3 }'
+      return 0
+    fi
+    # Fall back to the local file if the read-only slash command is unavailable.
+  fi
   case "${AGY_VER:-}" in
     ''|*[!0-9.]*) : ;;
     *)
@@ -218,7 +262,15 @@ allow_rules() {
       fi ;;
   esac
   [ -f "$SETTINGS" ] || return 1
-  python3 -c '
+  local py=()
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys' >/dev/null 2>&1; then
+    py=(python3)
+  elif command -v py >/dev/null 2>&1 && py -3 -c 'import sys' >/dev/null 2>&1; then
+    py=(py -3)
+  else
+    return 1
+  fi
+  "${py[@]}" -c '
 import json, sys
 try:
     allow = ((json.load(open(sys.argv[1])) or {}).get("permissions") or {}).get("allow")
@@ -250,19 +302,69 @@ ver_lt() {
 
 # True on native Windows (Git Bash/MSYS/Cygwin), NOT WSL — where headless agy hangs.
 on_windows_native() {
+  [ "${AGY_TEST_FORCE_POSIX:-0}" = 1 ] && return 1
   case "${OSTYPE:-}" in msys*|cygwin*|win32) return 0 ;; esac
   case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; esac
   return 1
 }
 
+BRIDGE_PY=()
+resolve_bridge_python() {
+  BRIDGE_PY=()
+  if [ -n "${AGY_BRIDGE_PYTHON:-}" ]; then
+    if [ -x "$AGY_BRIDGE_PYTHON" ] || command -v "$AGY_BRIDGE_PYTHON" >/dev/null 2>&1; then
+      BRIDGE_PY=("$AGY_BRIDGE_PYTHON"); return 0
+    fi
+    return 1
+  fi
+  if command -v py >/dev/null 2>&1 && py -3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+    BRIDGE_PY=(py -3); return 0
+  fi
+  if command -v python >/dev/null 2>&1 && python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+    BRIDGE_PY=(python); return 0
+  fi
+  return 1
+}
+
+agy_available() {
+  command -v agy >/dev/null 2>&1 || \
+    { [ -n "${AGY_PATH:-}" ] && [ -f "$AGY_PATH" ]; } || \
+    { [ -n "${LOCALAPPDATA:-}" ] && [ -f "$LOCALAPPDATA/agy/bin/agy.exe" ]; }
+}
+
 echo "Antigravity for Claude Code — doctor"
 
+if command -v claude >/dev/null 2>&1; then
+  ok "Claude Code found: $(command -v claude)"
+else
+  warn "Claude Code not found on this shell's PATH"
+  info "the plugin may still be running from Claude Code; verify with \`claude --version\`"
+fi
+
+if on_windows_native; then
+  if resolve_bridge_python; then
+    PY_DESC="$("${BRIDGE_PY[@]}" -c 'import sys; print(sys.version.split()[0])' 2>/dev/null)"
+    ok "Windows bridge Python: ${PY_DESC:-unknown} (${BRIDGE_PY[*]})"
+    if BRIDGE_DESC="$("${BRIDGE_PY[@]}" -c 'import agy_headless_bridge, winpty; print(agy_headless_bridge.__version__)' 2>/dev/null)"; then
+      ok "agy-headless-bridge $BRIDGE_DESC + pywinpty available"
+    else
+      bad "agy-headless-bridge / pywinpty not importable by ${BRIDGE_PY[*]}"
+      info "fix: \`${BRIDGE_PY[*]} -m pip install -U agy-headless-bridge\`"
+    fi
+  else
+    bad "Python >= 3.9 not found for native-Windows ConPTY"
+    info "fix: install Python, or set AGY_BRIDGE_PYTHON to python.exe"
+  fi
+  [ -f "$HERE/agy-windows-bridge.py" ] && ok "Windows adapter present" || bad "scripts/agy-windows-bridge.py missing"
+fi
+
 # 1. agy on PATH
-if command -v agy >/dev/null 2>&1; then
+if agy_available; then
   # version probe is guarded too: `command -v` already proved agy exists, and on a
   # headless hang even `agy --version` shouldn't be able to freeze doctor (issue #6).
   AGY_VER="$(agy_guard 10 --version 2>/dev/null | head -1 | tr -d '[:space:]')"
-  ok "agy found: $(command -v agy)  (${AGY_VER:-version unknown})"
+  AGY_FOUND="$(command -v agy 2>/dev/null || printf '%s' "${AGY_PATH:-Windows default path}")"
+  ok "agy found: $AGY_FOUND  (${AGY_VER:-version verified by ConPTY probes})"
 
   # `--tier` resolves to `--model`, and agy IGNORED --model/--effort in headless `-p`
   # until 1.1.10 — the flag was applied after model configuration had initialised, so
@@ -288,14 +390,14 @@ fi
 # 2. agy authenticated (can list models). Guarded by a wall-clock timeout so a
 #    headless/no-TTY hang (issue #6, esp. native Windows) doesn't freeze doctor
 #    and isn't misreported as "not authenticated".
-if command -v agy >/dev/null 2>&1; then
-  if [ -z "$TO_CMD" ]; then
+if agy_available; then
+  if ! on_windows_native && [ -z "$TO_CMD" ]; then
     warn "no \`timeout\`/\`gtimeout\` on PATH — cannot bound a possible \`agy models\` hang"
     info "install coreutils \`timeout\` (or Homebrew \`gtimeout\`) so doctor can tell a hang from an auth failure"
   fi
   MODELS="$(agy_guard 20 models 2>/dev/null)"; AGY_RC=$?
   AGY_TIMED_OUT=0
-  { [ "$AGY_RC" -eq 124 ] || [ "$AGY_RC" -eq 137 ]; } && AGY_TIMED_OUT=1
+  { [ "$AGY_RC" -eq 124 ] || [ "$AGY_RC" -eq 137 ] || { on_windows_native && [ "$AGY_RC" -eq 12 ]; }; } && AGY_TIMED_OUT=1
   if [ "$AGY_TIMED_OUT" -eq 1 ]; then
     bad "\`agy models\` hung and was killed after 20s — this is NOT an auth problem"
     if MCP_N="$(has_stdio_mcp)"; then
@@ -310,7 +412,7 @@ if command -v agy >/dev/null 2>&1; then
     fi
     info "agy hangs when run headless with no TTY/console (0-byte log, no output)."
     if on_windows_native; then
-      info "native Windows: agy needs a real console (ConPTY). Run delegation from WSL/macOS/Linux."
+      info "native Windows: the ConPTY bridge timed out; check idle timeout, network, and MCP startup."
     else
       info "check whether agy is being invoked without a console; prefer WSL/macOS/Linux for headless delegation."
     fi
