@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # SessionStart hook: inject this plugin's COST-AWARE routing policy as session
-# context, so the discipline (delegate above the break-even, keep Claude's context
-# lean, always verify agy's output) applies even when the `antigravity` skill isn't
+# context, so the discipline (small tasks eligible, Flash by default, neutral task
+# contracts, lean context, independent verification) applies even when the skill isn't
 # explicitly invoked. Prints the hookSpecificOutput JSON on stdout.
 #
 # Toggle off via plugin userConfig `coding_policy` (env CLAUDE_PLUGIN_OPTION_CODING_POLICY:

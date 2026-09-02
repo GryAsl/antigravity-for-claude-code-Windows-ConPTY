@@ -40,8 +40,8 @@ Do this:
 4. **Verify**: actually run/check the output; never trust a self-reported "done".
    Report what you delegated and how you verified it.
 
-Remember the break-even: only delegate if the offloaded volume clearly exceeds the
-spec + round-trip + verification overhead. Tiny tasks are cheaper to just do yourself.
+Small tasks are explicitly eligible. Do not refuse solely because a task is below the
+cost break-even; use one precise synchronous Flash delegation and avoid needless fan-out.
 
 **Long task, interactive session?** A sync delegation can also hit Claude Code's ~2-min
 Bash-tool limit — start it in the background and keep working (this also keeps the prompt

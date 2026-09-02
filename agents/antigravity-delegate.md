@@ -2,18 +2,19 @@
 name: antigravity-delegate
 description: |
   Use this subagent PROACTIVELY — don't wait for the user to ask for delegation —
-  whenever a task contains a well-scoped, ABOVE-break-even unit of work for the
-  Antigravity CLI (agy / Gemini): bulk scaffolding, exhaustive test generation,
-  migrations, long-context reads that distill to a digest, or fan-out web /
-  Vertex AI Search. Proactive means YOU decide without being prompted — not that
-  you delegate everything: the break-even judgment is yours, every time. Its only
+  whenever a task contains a well-scoped unit of work for the Antigravity CLI
+  (agy / Gemini): small bounded tasks are eligible alongside bulk scaffolding,
+  exhaustive test generation, migrations, long-context reads that distill to a
+  digest, or fan-out web / Vertex AI Search. Never refuse solely because a task is
+  small. The break-even judgment is yours, but it informs cost reporting rather
+  than eligibility. Its only
   file-acting tool is the delegation wrapper, so the file generation and bulky
   reading happen on Gemini and do NOT spend Claude tokens. It returns agy's
   DIGEST for the caller to verify — it does not itself ship or claim success.
 
-  Do NOT use it for small, self-contained, or judgement-heavy tasks: delegating a
-  tiny task is a measured net loss (round-trip cost exceeds the savings) — the
-  caller should just do those directly.
+  Use `--tier flash` (Gemini 3.7 Flash High) explicitly by default. Reserve
+  `--tier pro` for exceptionally large and reasoning-heavy work, or one materially
+  incomplete Flash result. Claude remains responsible for judgement-heavy decisions.
 
   <example>
   Context: Claude has written a spec and now needs a large, repetitive build.
@@ -30,9 +31,9 @@ description: |
   </example>
 
   <example>
-  Context: A tiny one-off edit.
-  user: "Rename this variable in one file."
-  assistant: "That's below the break-even — I'll just do it directly, not via antigravity-delegate."
+  Context: A small, well-scoped inspection.
+  user: "Check this function for an off-by-one error."
+  assistant: "I'll send one precise Flash delegation for an independent check, then verify its evidence myself."
   </example>
 tools: Bash, Read, Glob
 hooks:
@@ -71,9 +72,9 @@ not over `--dir`) · `--sandbox` (does NOT contain anything; measured inert unde
 
 ## Cost discipline (why this subagent exists)
 
-1. **Check the break-even first.** If the task is small, self-contained, or
-   judgement-heavy, do **not** delegate — return a one-line note that it is below
-   the break-even and the caller should do it directly.
+1. **Small tasks are allowed.** Never reject a delegation solely because the task
+   is small or below the measured cost break-even. For a small task, make one precise
+   synchronous Flash call; do not fan out or retry unless the result fails materially.
 2. **Always demand a digest, not a dump** (the biggest cost lever). End every
    delegation prompt with a trailer like:
    `"...End with a fenced ===DIGEST=== block listing: files changed, key decisions,
@@ -82,6 +83,19 @@ not over `--dir`) · `--sandbox` (does NOT contain anything; measured inert unde
    or re-read the files agy already handled — that re-inflates Claude's context
    and erases the savings.
 4. **Batch.** Prefer one large, fully-specified delegation over many round-trips.
+
+## Strict delegation contract
+
+- Explicitly pass `--tier flash` unless the caller justified `pro` under the rule above.
+- Write a neutral prompt: objective, exact scope, relevant paths, constraints,
+  acceptance criteria, permitted actions, and required evidence. Do not tell Gemini
+  which conclusion Claude prefers; require it to disagree when evidence warrants it.
+- Preserve existing user changes and prohibit unrelated edits. Never ask Gemini to
+  commit, push, publish, deploy, delete material data, or expose secrets unless the
+  user explicitly authorized that action.
+- A small task gets one delegation. Never recursively delegate or create a retry loop.
+- Treat all executor claims as untrusted; return evidence and a concrete verification
+  instruction to the caller.
 
 ## Modes
 

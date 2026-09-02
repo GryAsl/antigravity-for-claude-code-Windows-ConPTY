@@ -3,6 +3,17 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.25.4 — Persistent Flash-first delegation policy
+
+- Small, well-scoped tasks are now eligible for Antigravity delegation instead of
+  being rejected solely by the cost break-even rule.
+- Session policy now explicitly selects Gemini 3.7 Flash High for normal work,
+  reserves Pro for exceptional reasoning-heavy jobs, requires neutral scoped prompts,
+  digest-only returns, independent verification, and bounded retries.
+- The policy is reinjected on new, resumed, cleared, and compacted sessions.
+- The prompt nudge now probes for a working Python and falls back to `py -3`, so a
+  broken Windows Store `python3` alias no longer disables delegation hints silently.
+
 ## 0.25.3 — Windows ConPTY fork
 
 - Native Windows 11 headless delegation now routes through the unchanged

@@ -1,6 +1,6 @@
 {
   "name": "antigravity",
-  "version": "0.25.3",
+  "version": "0.25.4",
   "description": "Run the Antigravity CLI (Gemini) as a Claude Code sub-agent, including native Windows 11 headless support through agy-headless-bridge and ConPTY.",
   "author": {
     "name": "GryAsl"
@@ -36,7 +36,7 @@
     "coding_policy": {
       "type": "string",
       "title": "Inject routing policy at session start",
-      "description": "When on, a SessionStart hook injects this plugin's cost-aware routing policy (delegate above the break-even, keep Claude's context lean, always verify agy's output) as session context, so the discipline applies without invoking the skill. Set to off/false/0/no to suppress.",
+      "description": "When on, SessionStart injects the routing policy: small tasks are eligible, Gemini 3.7 Flash High is the normal executor, prompts stay neutral and scoped, context stays lean, and Claude independently verifies output. Set to off/false/0/no to suppress.",
       "default": "on"
     },
     "default_model": {
@@ -78,7 +78,7 @@
     "delegation_nudge": {
       "type": "string",
       "title": "Nudge delegation on bulk-looking prompts",
-      "description": "When on, a UserPromptSubmit hook adds a short advisory note to Claude's context when a prompt looks like bulk work above the delegation break-even (mass edits, migrations, exhaustive tests, fan-out search). Advisory only — Claude still makes the break-even judgment per task. Set to off/false/0/no to suppress.",
+      "description": "When on, a UserPromptSubmit hook reminds Claude to consider the Antigravity delegate for bulk-looking prompts. Small tasks remain eligible through the session/global policy. Set to off/false/0/no to suppress.",
       "default": "on"
     },
     "usage_log": {

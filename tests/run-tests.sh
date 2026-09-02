@@ -632,6 +632,8 @@ check "policy-context.json is valid JSON" 0 "$rc"
 out=$("$HOOKS/inject-policy.sh" 2>/dev/null); rc=$?
 check "inject-policy default on -> emits additionalContext" 0 "$rc" "additionalContext" "$out"
 check "inject-policy is cost-aware (not 'delegate everything')" 0 "$rc" "COST-AWARE" "$out"
+check "inject-policy allows small tasks" 0 "$rc" "Small, self-contained tasks ARE eligible" "$out"
+check "inject-policy pins normal work to Flash" 0 "$rc" '`--tier flash` (Gemini 3.7 Flash High)' "$out"
 # the emitted stdout is a well-formed SessionStart hook payload (not just substrings)
 printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["hookSpecificOutput"]["hookEventName"]=="SessionStart"' 2>/dev/null; rc=$?
 check "inject-policy emits valid SessionStart JSON" 0 "$rc"
@@ -651,6 +653,8 @@ python3 - "$HOOKS/hooks.json" <<'PY' 2>/dev/null; rc=$?
 import json,sys
 hooks=json.load(open(sys.argv[1]))["hooks"]
 assert hooks.get("SessionStart") and hooks.get("UserPromptSubmit")
+session_matchers={g.get("matcher") for g in hooks["SessionStart"]}
+assert {"startup", "resume", "clear", "compact"} <= session_matchers
 for groups in hooks.values():
     assert isinstance(groups,list) and groups
     for g in groups:
@@ -666,6 +670,15 @@ check "nudge fires on bulk EN prompt" 0 "$rc" "additionalContext" "$out"
 check "nudge preserves Claude's judgment (not a mandate)" 0 "$rc" "THE JUDGMENT IS YOURS" "$out"
 printf '%s' "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['hookSpecificOutput']['hookEventName']=='UserPromptSubmit'" 2>/dev/null; rc=$?
 check "nudge emits valid UserPromptSubmit JSON" 0 "$rc"
+# Native Git Bash may expose a non-working Store python3 alias. The nudge must fall
+# through to `py -3` instead of silently disappearing.
+REAL_NUDGE_PY="$(command -v python3)"
+mkdir -p "$TMP/nudge-python-fallback"
+printf '#!/usr/bin/env bash\nexit 1\n' >"$TMP/nudge-python-fallback/python3"
+printf '#!/usr/bin/env bash\n[ "$1" = -3 ] && shift\nexec %q "$@"\n' "$REAL_NUDGE_PY" >"$TMP/nudge-python-fallback/py"
+chmod +x "$TMP/nudge-python-fallback/python3" "$TMP/nudge-python-fallback/py"
+out=$(printf '%s' '{"prompt":"migrate all files"}' | PATH="$TMP/nudge-python-fallback:$PATH" "$NUDGE" 2>/dev/null); rc=$?
+check "nudge falls back from broken python3 to py -3" 0 "$rc" "additionalContext" "$out"
 out=$(printf '%s' '{"prompt":"リポジトリ全体のテストを網羅的に生成して"}' | "$NUDGE" 2>/dev/null); rc=$?
 check "nudge fires on bulk JA prompt" 0 "$rc" "additionalContext" "$out"
 out=$(printf '%s' '{"prompt":"fix the typo in README"}' | "$NUDGE" 2>/dev/null); rc=$?
@@ -854,9 +867,12 @@ if grep -q "PreToolUse" "$AGENT" && grep -q "validate-delegate-bash.sh" "$AGENT"
   echo "ok: delegate agent wires the PreToolUse Bash gate"; PASS=$((PASS+1));
 else echo "FAIL: delegate agent missing PreToolUse gate"; FAIL=$((FAIL+1)); fi
 # proactive auto-selection, WITH the judgment kept on Claude (not "delegate everything")
-if grep -q "PROACTIVELY" "$AGENT" && grep -q "break-even judgment is yours" "$AGENT"; then
+if grep -q "PROACTIVELY" "$AGENT" && grep -q "break-even judgment is yours" "$AGENT" && grep -q "Never refuse solely because a task is" "$AGENT"; then
   echo "ok: delegate agent is proactive AND keeps the break-even judgment"; PASS=$((PASS+1));
 else echo "FAIL: delegate agent missing proactive-with-judgment description"; FAIL=$((FAIL+1)); fi
+if grep -q 'Explicitly pass `--tier flash`' "$AGENT" && ! grep -q 'do \*\*not\*\* delegate' "$AGENT"; then
+  echo "ok: delegate agent allows small tasks and explicitly selects Flash"; PASS=$((PASS+1));
+else echo "FAIL: delegate agent small-task/Flash policy missing or contradictory"; FAIL=$((FAIL+1)); fi
 
 echo "== bin/ entrypoints (issue #11: \$CLAUDE_PLUGIN_ROOT not on model-run Bash) =="
 BIN="$ROOT/bin"
