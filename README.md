@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> This project has moved to [GryAsl/antigravity-for-claude-code-and-codex](https://github.com/GryAsl/antigravity-for-claude-code-and-codex). Use the new independent repository for Claude Code and Codex support. This repository is archived and no longer maintained.
+
 <div align="center">
 
 # 🛰️ Antigravity for Claude Code On Windows
